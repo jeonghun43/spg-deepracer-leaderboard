@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SPG DeepRacer{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><a href="/leaderboard" style="color:inherit;text-decoration:none;">🏁 SPG DeepRacer</a></div>
+    <nav>
+      <a href="/leaderboard">리더보드</a>
+      <a href="/submit">모델 제출</a>
+      <a href="/admin">관리자</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

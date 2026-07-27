@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}리더보드 — 시즌 목록{% endblock %}
+{% block content %}
+<h1>시즌 목록</h1>
+{% if not seasons %}
+  <p class="muted">아직 등록된 시즌이 없습니다.</p>
+{% else %}
+<table>
+  <thead><tr><th>시즌</th><th>트랙</th><th>기간</th><th>상태</th></tr></thead>
+  <tbody>
+    {% for season in seasons %}
+    <tr>
+      <td>
+        <a href="/leaderboard/{{ season.id }}">{{ season.name }}</a>
+        {% if season.status.value == 'active' %} <span class="badge">현재 진행중</span>{% endif %}
+      </td>
+      <td>{{ season.track_name }}</td>
+      <td>{{ season.start_date }} ~ {{ season.end_date }}</td>
+      <td><span class="badge">{{ season.status.value }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

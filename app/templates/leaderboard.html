@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ season.name }} 리더보드{% endblock %}
+{% block content %}
+<h1>{{ season.name }} 리더보드</h1>
+<p class="muted">트랙: {{ season.track_name }} · <a href="/leaderboard/seasons">← 다른 시즌 보기</a></p>
+
+<table>
+  <thead><tr><th>순위</th><th>팀</th><th>최고기록</th><th>제출 횟수</th><th>영상</th></tr></thead>
+  <tbody>
+    {% for row in ranked %}
+    <tr>
+      <td class="{{ 'rank-1' if loop.index==1 else ('rank-2' if loop.index==2 else ('rank-3' if loop.index==3 else '')) }}">{{ loop.index }}</td>
+      <td>{{ row.team.name }}</td>
+      <td>{{ "%.2f"|format(row.lap_time) }}초</td>
+      <td>{{ row.total_submissions }}</td>
+      <td>{% if row.video_url %}<a href="{{ row.video_url }}" target="_blank">보기</a>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if unranked %}
+<h2>미완주</h2>
+<table>
+  <thead><tr><th>팀</th><th>제출 횟수</th></tr></thead>
+  <tbody>
+    {% for row in unranked %}
+    <tr><td>{{ row.team.name }}</td><td>{{ row.total_submissions }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if not ranked and not unranked %}
+<p class="muted">아직 제출된 기록이 없습니다.</p>
+{% endif %}
+{% endblock %}

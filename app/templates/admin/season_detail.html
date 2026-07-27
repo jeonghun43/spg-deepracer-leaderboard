@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}{{ season.name }} 관리{% endblock %}
+{% block content %}
+<h1>{{ season.name }}</h1>
+<p class="muted">트랙: {{ season.track_name }} · 기간: {{ season.start_date }} ~ {{ season.end_date }}</p>
+<p>상태: <span class="badge">{{ status_labels[season.status] }}</span></p>
+
+{% if bulk_error %}
+<div class="card" style="border-color:#c0392b;">
+  <strong>{{ bulk_error }}</strong>
+</div>
+{% endif %}
+
+{% if issued %}
+<div class="card" style="border-color:#3767ff;">
+  {% if issued_kind == 'reissued' %}
+  <strong>비밀번호가 재발급되었습니다 — 기존 비밀번호는 더 이상 사용할 수 없습니다. 지금 바로 저장하거나 팀에 전달해주세요 (다시 표시되지 않습니다).</strong>
+  {% else %}
+  <strong>새 팀 계정 {{ issued|length }}개가 발급되었습니다 — 지금 바로 저장하거나 팀에 전달해주세요 (다시 표시되지 않습니다).</strong>
+  {% endif %}
+  <table id="issued-table">
+    <thead><tr><th>팀</th><th>아이디</th><th>비밀번호</th></tr></thead>
+    <tbody>
+      {% for row in issued %}
+      <tr>
+        <td>{{ row.name }}</td>
+        <td><code>{{ row.login_id }}</code></td>
+        <td><code>{{ row.password }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button type="button" class="secondary" onclick="downloadIssuedCsv()">CSV 다운로드</button>
+  {% if skipped %}
+  <p class="muted">건너뛴 이름: {% for row in skipped %}{{ row.name }} ({{ row.reason }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+</div>
+<script>
+  // 서버에 비밀번호를 다시 보내지 않도록 화면의 표를 그대로 CSV로 만든다.
+  function downloadIssuedCsv() {
+    const rows = [["팀", "아이디", "비밀번호"]];
+    document.querySelectorAll("#issued-table tbody tr").forEach(function (tr) {
+      rows.push(Array.from(tr.cells).map(function (td) { return td.innerText.trim(); }));
+    });
+    const csv = rows.map(function (cols) {
+      return cols.map(function (v) { return '"' + v.replace(/"/g, '""') + '"'; }).join(",");
+    }).join("\r\n");
+    // 엑셀이 UTF-8로 인식하도록 BOM을 붙인다 (없으면 한글이 깨진다).
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = {{ season.name | tojson }} + "_teams.csv";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+</script>
+{% elif skipped %}
+<div class="card">
+  <strong>새로 만들어진 팀이 없습니다.</strong>
+  <p class="muted">건너뛴 이름: {% for row in skipped %}{{ row.name }} ({{ row.reason }}){% if not loop.last %}, {% endif %}{% endfor %}</p>
+</div>
+{% endif %}
+
+{% if next_status %}
+<form method="post" action="/admin/seasons/{{ season.id }}/advance-status" class="inline"
+      onsubmit="return confirm('{{ status_labels[next_status] }}(으)로 전환할까요?{% if next_status.value == 'archived' %} 최고기록이 아닌 제출의 모델/영상 파일과 팀 계정이 삭제됩니다.{% endif %}');">
+  <button type="submit">{{ status_labels[next_status] }}(으)로 전환</button>
+</form>
+{% endif %}
+<a href="/leaderboard/{{ season.id }}">공개 리더보드 보기 →</a>
+
+<h2>참가팀</h2>
+<div class="card">
+  <form method="post" action="/admin/seasons/{{ season.id }}/teams/new">
+    <label for="team_names">팀 이름을 한 줄에 하나씩 입력하세요 (한 번에 최대 {{ max_bulk_teams }}팀).</label>
+    <textarea id="team_names" name="team_names" rows="6" required
+              placeholder="1조&#10;2조&#10;3조" style="width:100%;max-width:420px;display:block;"></textarea>
+    <p class="muted">쉼표·탭으로 구분해도 됩니다. 이미 등록된 이름은 건너뜁니다. 아이디/비밀번호는 등록 직후 한 번만 표시됩니다.</p>
+    <button type="submit">팀 일괄 등록</button>
+  </form>
+</div>
+<table>
+  <thead><tr><th>팀</th><th>제출 수</th><th>오늘 완료 카운트 (한도 {{ daily_limit }})</th><th>비밀번호</th><th>실격</th></tr></thead>
+  <tbody>
+    {% for team in teams %}
+    <tr>
+      <td>{{ team.name }}{% if team.disqualified %} <span class="badge status-error">실격</span>{% endif %}</td>
+      <td>{{ team.submissions|length }}</td>
+      <td>
+        <form method="post" action="/admin/teams/{{ team.id }}/daily-count" class="inline">
+          <input type="number" name="count" min="0" max="999"
+                 value="{{ daily_counts[team.id] }}"
+                 style="width:60px;display:inline-block;">
+          <button type="submit" class="secondary">지정</button>
+        </form>
+      </td>
+      <td>
+        {% if team.account %}
+        <form method="post" action="/admin/teams/{{ team.id }}/reissue-password" class="inline"
+              onsubmit='return confirm({{ (team.name ~ " 팀의 비밀번호를 재발급할까요? 기존 비밀번호는 즉시 사용할 수 없게 됩니다.") | tojson }});'>
+          <button type="submit" class="secondary">재발급</button>
+        </form>
+        {% else %}
+        <span class="muted">—</span>
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" action="/admin/teams/{{ team.id }}/disqualify" class="inline">
+          <button type="submit" class="{{ 'secondary' if team.disqualified else 'danger' }}">
+            {{ '실격 해제' if team.disqualified else '실격 처리' }}
+          </button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">등록된 팀이 없습니다.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>최근 제출 (최대 100건)</h2>
+<table>
+  <thead><tr><th>팀</th><th>제출 시각</th><th>상태</th><th>결과</th></tr></thead>
+  <tbody>
+    {% for s in submissions %}
+    <tr>
+      <td>{{ s.team.name }}</td>
+      <td>{{ s.submitted_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td><span class="badge status-{{ s.status.value }}">{{ s.status.value }}</span></td>
+      <td>
+        {% if s.status.value == 'error' %}{{ s.error_message or '-' }}
+        {% elif s.result %}
+          {% if s.result.finish_status.value == 'finished' %}{{ "%.2f"|format(s.result.lap_time_seconds) }}초
+          {% else %}미완주{% endif %}
+        {% else %}-{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">아직 제출이 없습니다.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p><a href="/admin">← 대시보드</a></p>
+{% endblock %}

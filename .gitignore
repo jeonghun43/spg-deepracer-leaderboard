@@ -1,0 +1,31 @@
+# --- 파이썬 ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# --- 비밀 값 ---
+# .env에는 SESSION_SECRET 등 실제 운영 값이 들어간다. .env.example만 커밋한다.
+.env
+
+# --- 로컬 전용 설정 ---
+# 내 PC의 경로·권한 허용 목록이라 공유하지 않는다. (.claude/settings.json은 공유 대상)
+.claude/settings.local.json
+
+# --- 참가자 데이터 ---
+# 제출 모델(.tar.gz)·평가 영상·시뮬레이션 로그·metrics. 타인의 저작물이고 용량도 크다.
+# 앱과 워커가 실행 시 mkdir(parents=True)로 만들므로 빈 폴더를 커밋할 필요가 없다.
+/storage/
+
+# 위 경로 밖으로 새어나온 경우를 대비한 안전망
+*.tar.gz
+*.mp4
+*.log
+*.db
+
+# --- 편집기 / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

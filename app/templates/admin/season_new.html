@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}새 시즌{% endblock %}
+{% block content %}
+<h1>새 시즌 만들기</h1>
+<div class="card" style="max-width:420px;">
+  <form method="post" action="/admin/seasons/new">
+    <div class="field">
+      <label for="name">시즌 이름</label>
+      <input type="text" id="name" name="name" required placeholder="예: 2026 봄 시즌">
+    </div>
+    <div class="field">
+      <label for="track_name">트랙</label>
+      <input type="text" id="track_name" name="track_name" required placeholder="예: Vegas_track">
+    </div>
+    <div class="field">
+      <label for="start_date">시작일</label>
+      <input type="date" id="start_date" name="start_date" required>
+    </div>
+    <div class="field">
+      <label for="end_date">마감일</label>
+      <input type="date" id="end_date" name="end_date" required>
+    </div>
+    <button type="submit">생성</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}관리자 대시보드{% endblock %}
+{% block content %}
+<h1>관리자 대시보드</h1>
+<p><a href="/admin/seasons/new">+ 새 시즌 만들기</a></p>
+<table>
+  <thead><tr><th>시즌</th><th>트랙</th><th>기간</th><th>상태</th></tr></thead>
+  <tbody>
+    {% for season in seasons %}
+    <tr>
+      <td><a href="/admin/seasons/{{ season.id }}">{{ season.name }}</a></td>
+      <td>{{ season.track_name }}</td>
+      <td>{{ season.start_date }} ~ {{ season.end_date }}</td>
+      <td><span class="badge">{{ season.status.value }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">등록된 시즌이 없습니다.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p><a href="/admin/logout">로그아웃</a></p>
+{% endblock %}

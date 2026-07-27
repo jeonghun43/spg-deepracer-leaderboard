@@ -1,0 +1,35 @@
+# 평가 워커(worker/)는 이 compose에 포함하지 않는다.
+# dr-start-evaluation이 호스트(WSL Ubuntu)의 DRFC(Docker Swarm)를 직접 호출해야 하므로,
+# 워커는 컨테이너가 아니라 호스트에서 직접 실행한다 (README "워커 실행" 참고).
+# DB는 호스트 포트로 노출해 호스트에서 도는 워커가 접속할 수 있게 한다.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-drleader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-drleader}
+      POSTGRES_DB: ${POSTGRES_DB:-drleader}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  web:
+    build: .
+    restart: unless-stopped
+    environment:
+      # 컨테이너 안에서는 호스트가 db(서비스명)이므로 .env의 DATABASE_URL을
+      # 그대로 쓰지 않고 여기서 조립한다. 계정 정보는 위 db 서비스와 같은 값.
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-drleader}:${POSTGRES_PASSWORD:-drleader}@db:5432/${POSTGRES_DB:-drleader}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+      SESSION_HTTPS_ONLY: ${SESSION_HTTPS_ONLY:-false}
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+
+volumes:
+  db_data:

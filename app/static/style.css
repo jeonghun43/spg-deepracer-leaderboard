@@ -1,0 +1,72 @@
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  background: #0f1115;
+  color: #e8e9ec;
+  margin: 0;
+  line-height: 1.5;
+}
+a { color: #6cb6ff; }
+header {
+  background: #171a21;
+  padding: 14px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #262b36;
+}
+header .brand { font-weight: 700; font-size: 1.1rem; }
+header nav a { margin-left: 16px; text-decoration: none; }
+main { max-width: 960px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.2rem; margin-top: 2rem; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262b36; }
+th { color: #9aa2b1; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; }
+.rank-1 { color: #ffd54a; font-weight: 700; }
+.rank-2 { color: #cfd8e3; font-weight: 700; }
+.rank-3 { color: #d69a5c; font-weight: 700; }
+.card {
+  background: #171a21;
+  border: 1px solid #262b36;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  background: #262b36;
+}
+.badge.status-queued { background: #3a3320; color: #e8c86b; }
+.badge.status-running { background: #1f3a4d; color: #6cb6ff; }
+.badge.status-done { background: #1f3d2a; color: #6bdc8f; }
+.badge.status-error { background: #3d1f22; color: #ff8b8b; }
+input[type=text], input[type=password], input[type=number], input[type=date], input[type=file] {
+  background: #0f1115;
+  border: 1px solid #33394a;
+  color: #e8e9ec;
+  padding: 8px 10px;
+  border-radius: 6px;
+  width: 100%;
+  max-width: 360px;
+}
+form.inline { display: inline; }
+button, input[type=submit] {
+  background: #3767ff;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+button.secondary { background: #33394a; }
+button.danger { background: #a6323a; }
+.error { color: #ff8b8b; margin: 8px 0; }
+.muted { color: #9aa2b1; font-size: 0.9rem; }
+.field { margin-bottom: 14px; }
+label { display: block; margin-bottom: 4px; font-size: 0.9rem; color: #9aa2b1; }
+video { max-width: 100%; border-radius: 6px; }
