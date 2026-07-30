@@ -52,8 +52,10 @@
 - 평가 워커: 웹과 별개의 파이썬 프로세스. DB 큐를 폴링해서 한 건씩 순차 처리하고,
   DeepRacer-for-Cloud(DRFC)라는 외부 도구를 셸로 호출해 시뮬레이션을 돌린다.
   결과(metrics JSON, 영상)는 MinIO(S3 호환 저장소)에서 boto3로 가져온다.
-- 배포: 웹과 DB는 Docker Compose 컨테이너, 워커는 호스트(WSL2 Ubuntu)에서 직접 실행.
-  외부 공개는 Cloudflare Tunnel.
+- 배포: **두 대로 나뉘어 있다.** 웹·DB·리버스 프록시(Caddy)는 클라우드 서버(AWS Lightsail)에서
+  Docker Compose로 돌고 도메인+HTTPS로 공개된다. 평가 워커와 DRFC는 운영자 노트북(WSL2 Ubuntu)에
+  남아 있다(시뮬레이터가 2GB 서버로는 못 돌아감). 둘은 Tailscale 사설망으로 DB를 주고받고,
+  모델·영상은 토큰 인증 HTTPS 엔드포인트(`/internal/...`)로 전송한다.
 
 [디렉터리 구조]
 app/            웹 애플리케이션

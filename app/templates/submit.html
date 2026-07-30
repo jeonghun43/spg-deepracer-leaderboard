@@ -6,6 +6,8 @@
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
+{% include "_worker_status.html" %}
+
 <div class="card">
   <h2 style="margin-top:0;">오늘 제출 현황</h2>
   <p>남은 제출 횟수: <strong>{{ remaining }} / {{ daily_limit }}</strong></p>
@@ -15,7 +17,10 @@
       현재 제출 <span class="badge status-{{ active_submission.status.value }}">{{ '대기 중' if active_submission.status.value == 'queued' else '평가 중' }}</span>
       {% if queue_position %}— 앞에 {{ queue_position }}건 대기 중{% endif %}
     </p>
-    {% if estimated_wait_minutes %}
+    {% if worker_status and not worker_status.online %}
+    {# 예상 시간 계산은 워커가 돌고 있다는 가정이라, 멈춰 있으면 숫자를 보여주면 거짓말이 된다. #}
+    <p class="muted">평가 서버가 재개된 뒤 순서대로 처리됩니다. 이 페이지를 새로고침해 확인하세요.</p>
+    {% elif estimated_wait_minutes %}
     <p class="muted">결과가 나오기까지 약 {{ estimated_wait_minutes }}분 정도 걸립니다. 이 페이지를 새로고침해 확인하세요.</p>
     {% endif %}
     <p class="muted">이 제출의 결과가 나오기 전까지는 새 모델을 업로드할 수 없습니다.</p>
@@ -48,7 +53,8 @@
     {% if latest_submission.result.finish_status.value == 'finished' %}
       <p>완주 — 랩타임 {{ "%.2f"|format(latest_submission.result.lap_time_seconds) }}초</p>
     {% else %}
-      <p>미완주 (시간 초과)</p>
+      <p>{{ latest_submission.result | failure_summary }}</p>
+      <p class="muted">{{ eval_laps }}바퀴를 모두 완주해야 기록으로 인정됩니다.</p>
     {% endif %}
   {% endif %}
 </div>

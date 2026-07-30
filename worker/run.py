@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import socket
+import threading
 import time
 from pathlib import Path
 
@@ -22,14 +23,18 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import EvaluationResult, FinishStatus, Submission, SubmissionStatus
 from app.retention import prune_team_files
-from app.storage_paths import resolve_storage_path
-from worker import drfc
+from app.worker_status import touch_heartbeat
+from worker import drfc, transfer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("worker")
 
 WORKER_ID = socket.gethostname()
 POLL_INTERVAL_SECONDS = 5
+# 웹 서버가 내려가 있을 때 같은 제출을 초당 몇 번씩 다시 집지 않도록 잠시 쉰다.
+TRANSFER_RETRY_SLEEP_SECONDS = 30
+# 화면의 "중지" 판정 기준(기본 3분)보다 충분히 짧아야 평가 중에도 살아있다고 인식된다.
+HEARTBEAT_INTERVAL_SECONDS = 30
 DRFC_DIR = os.environ.get("DRFC_DIR", str(Path.home() / "deepracer-for-cloud"))
 DR_ENV_FILE = os.environ.get("DR_ENV_FILE", "run.env")
 MAX_WAIT_SECONDS = int(os.environ.get("EVAL_MAX_WAIT_SECONDS", "1800"))
@@ -92,10 +97,16 @@ def recover_stale_running(db: Session) -> None:
 def prune_finished_team_files(db: Session, submission_id: int) -> None:
     """평가가 끝난 팀의 파일을 보존 정책대로 정리한다 (최고기록만 남긴다).
 
-    시즌 종료까지 기다리면 디스크가 먼저 찬다 (모델 1건 약 250MB). 정리에 실패하더라도
-    평가 결과 자체는 이미 저장됐으므로, 예외를 삼키고 경고만 남긴다.
+    시즌 종료까지 기다리면 디스크가 먼저 찬다 (모델 1건 약 250MB).
+
+    **파일이 있는 쪽에서 지워야 한다.** 웹이 다른 기기에 있으면(http 모드) 이 워커의 디스크에는
+    지울 파일이 없다 — 서버에 정리를 요청해야 한다. 로컬 모드에서만 직접 지운다.
+    정리에 실패하더라도 평가 결과는 이미 저장됐으므로 예외를 삼키고 경고만 남긴다.
     """
     try:
+        if transfer.uses_http():
+            transfer.request_prune(submission_id)
+            return
         submission = db.get(Submission, submission_id)
         if submission is None:
             return
@@ -104,6 +115,32 @@ def prune_finished_team_files(db: Session, submission_id: int) -> None:
     except Exception:  # noqa: BLE001 - 정리 실패가 평가 결과를 되돌리면 안 된다
         db.rollback()
         logger.exception("보존 정책 적용 실패: submission=%s", submission_id)
+
+
+def start_heartbeat_thread() -> threading.Thread:
+    """생존 신호를 별도 스레드에서 주기적으로 남긴다.
+
+    폴링 루프에서만 갱신하면, 평가 한 건에 붙잡혀 있는 10~30분 동안 신호가 끊긴다.
+    그러면 워커가 가장 열심히 일하는 중에 참가자 화면에 "평가 서버 중지"가 뜬다
+    (2026-07-30 실제 발생). 데몬 스레드라 워커가 죽으면 함께 죽으므로, 진짜 중단은
+    그대로 감지된다.
+    """
+
+    def loop() -> None:
+        while True:
+            db = SessionLocal()
+            try:
+                touch_heartbeat(db, WORKER_ID)
+            except Exception:  # noqa: BLE001 - 하트비트 실패로 워커가 죽으면 안 된다
+                db.rollback()
+                logger.warning("하트비트 갱신 실패", exc_info=True)
+            finally:
+                db.close()
+            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+    thread = threading.Thread(target=loop, daemon=True, name="heartbeat")
+    thread.start()
+    return thread
 
 
 def process_submission(submission_id: int) -> None:
@@ -128,15 +165,9 @@ def process_submission(submission_id: int) -> None:
                 head = s3.head_object(Bucket=drfc.get_bucket(), Key=existing_key)
                 start_marker = head["LastModified"]
 
-            # 웹(컨테이너)이 적은 경로를 호스트 기준으로 해석한다 — 상대 경로/구환경
-            # 절대 경로 모두 흡수한다 (app/storage_paths.py 참고).
-            model_file = resolve_storage_path(submission.model_path)
-            if not model_file.is_file():
-                raise drfc.EvaluationError(
-                    "업로드된 모델 파일을 찾을 수 없습니다 "
-                    f"(기록된 경로: {submission.model_path}, 확인한 경로: {model_file}). "
-                    "운영자에게 문의해 주세요."
-                )
+            # 웹과 같은 디스크를 쓰면 원본 경로를 그대로, 다른 기기에 있으면 HTTP로 받아온다
+            # (worker/transfer.py). 받지 못하면 TransferError가 올라가 대기열로 되돌린다.
+            model_file = transfer.fetch_model(submission.id, submission.model_path, work_dir)
 
             drfc.inject_model(s3, model_file, work_dir)
             drfc.run_evaluation_blocking(
@@ -154,24 +185,35 @@ def process_submission(submission_id: int) -> None:
             metrics_file = settings.metrics_dir / f"{season_id}/{team_id}/{submission.id}.json"
             metrics_file.parent.mkdir(parents=True, exist_ok=True)
             metrics_file.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 웹이 다른 기기에 있으면 이 사본이 백업 대상 밖에 남는다. 서버로도 올린다.
+            transfer.deliver_metrics(submission.id, metrics_file)
 
             finish_status, lap_time, off_track = drfc.parse_evaluation_result(
                 metrics, settings.online_eval_laps
             )
+            # metrics가 비어 있으면(한 바퀴도 못 끝낸 경우) 평가 로그에서 뽑는다.
+            best_progress, failure_reason = drfc.summarize_progress(
+                metrics, log_path_for(submission.id)
+            )
 
-            video_rel_path = f"{season_id}/{team_id}/{submission.id}.mp4"
-            video_key = drfc.download_video(s3, settings.videos_dir / video_rel_path)
+            # 영상 키는 다음 평가 때 덮어써지므로 결과 저장 전에 먼저 내려받아 둔다.
+            local_video = work_dir / "evaluation.mp4"
+            video_key = drfc.download_video(s3, local_video)
             if video_key is None:
                 logger.warning("쓸 만한 평가 영상을 찾지 못했습니다: submission=%s", submission.id)
             else:
-                logger.info("평가 영상 저장: submission=%s key=%s", submission.id, video_key)
+                logger.info("평가 영상 수집: submission=%s key=%s", submission.id, video_key)
 
+            # 순위를 좌우하는 결과를 먼저 확정한다. 영상은 부가 정보라 그 다음이다
+            # (전송 대상 제출이 DB에 있어야 웹이 영상을 받아줄 수 있기도 하다).
             result = EvaluationResult(
                 submission_id=submission.id,
                 finish_status=FinishStatus.FINISHED if finish_status == "finished" else FinishStatus.TIMEOUT,
                 lap_time_seconds=lap_time,
                 off_track_count=off_track,
-                video_path=video_rel_path if video_key else None,
+                best_progress_percent=best_progress,
+                failure_reason=failure_reason,
+                video_path=None,
                 metrics_raw_path=metrics_key,
             )
             db.add(result)
@@ -182,6 +224,25 @@ def process_submission(submission_id: int) -> None:
                 "평가 완료: submission=%s finish_status=%s lap_time=%s off_track=%s",
                 submission.id, finish_status, lap_time, off_track,
             )
+
+            if video_key is not None:
+                video_rel_path = f"{season_id}/{team_id}/{submission.id}.mp4"
+                stored_video = transfer.deliver_video(submission.id, local_video, video_rel_path)
+                if stored_video:
+                    result.video_path = stored_video
+                    db.commit()
+        except transfer.TransferError as exc:
+            # 웹 서버에 연결하지 못한 것은 참가자 잘못이 아니다. '오류'로 끝내면 결과 없이
+            # 제출이 소진되므로, 대기열로 되돌려 서버가 돌아왔을 때 다시 처리되게 한다.
+            db.rollback()
+            submission = db.get(Submission, submission_id)
+            submission.status = SubmissionStatus.QUEUED
+            submission.worker_id = None
+            submission.started_at = None
+            db.commit()
+            logger.warning("파일 전송 실패 — 대기열로 되돌립니다: submission=%s %s", submission_id, exc)
+            # 곧바로 같은 건을 다시 집어 로그만 쌓는 것을 막는다.
+            time.sleep(TRANSFER_RETRY_SLEEP_SECONDS)
         except drfc.EvaluationError as exc:
             db.rollback()
             submission = db.get(Submission, submission_id)
@@ -214,6 +275,9 @@ def main() -> None:
         recover_stale_running(db)
     finally:
         db.close()
+
+    # 평가에 붙잡혀 있는 동안에도 신호가 끊기지 않도록 별도 스레드에서 갱신한다.
+    start_heartbeat_thread()
 
     while True:
         db = SessionLocal()

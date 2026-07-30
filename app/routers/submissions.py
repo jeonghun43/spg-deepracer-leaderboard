@@ -12,6 +12,7 @@ from app.models import Season, SeasonStatus, Submission, SubmissionStatus, Team
 from app.quota import get_remaining_submissions, has_active_submission, today_kst
 from app.render import templates
 from app.storage_paths import to_storage_relative
+from app.worker_status import get_worker_status
 
 router = APIRouter(tags=["submissions"])
 
@@ -61,6 +62,7 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
             "daily_limit": settings.daily_submission_limit,
             "can_submit": can_submit,
             "eval_laps": settings.online_eval_laps,
+            "worker_status": get_worker_status(db),
             "error": request.query_params.get("error"),
         },
     )
