@@ -1,0 +1,21 @@
+[Unit]
+Description=DeepRacer 리더보드 데이터 백업 (DB + storage)
+# DB 컨테이너가 떠 있어야 pg_dump가 된다. 아직 안 떴으면 타이머가 다음 기회에 다시 시도한다.
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+# ⚠️ 다른 PC로 옮기면 이 사용자명과 아래 경로들을 그 환경에 맞게 고쳐야 한다.
+# docker 명령을 쓸 수 있는 사용자여야 한다 (docker 그룹 소속).
+User=jeonghun
+WorkingDirectory=/mnt/c/Users/jjh03/spg_deepracer_leaderboard
+ExecStart=/usr/bin/env bash /mnt/c/Users/jjh03/spg_deepracer_leaderboard/scripts/backup.sh
+
+# 기본값을 바꾸려면 여기서 덮어쓴다.
+# Environment=BACKUP_DIR=/mnt/c/Users/jjh03/drleader-backup
+# Environment=BACKUP_KEEP=14
+# Environment=BACKUP_INCLUDE_MODELS=false
+
+[Install]
+WantedBy=multi-user.target

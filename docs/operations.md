@@ -40,8 +40,8 @@ tail -f /tmp/worker.log
 ```
 
 **워커는 동시에 1개만 실행한다.** 지금 구조는 순차 처리를 전제로 하며, 특히 평가 영상이
-S3의 고정 키(`.../mp4/camera-topview/0-video.mp4`)에 덮어써지기 때문에 여러 워커가 동시에
-돌면 영상이 섞인다. 여러 대로 확장하려면
+S3의 고정 키(`.../mp4/camera-pip/0-video.mp4` 등 카메라 앵글별 고정 경로)에 덮어써지기 때문에
+여러 워커가 동시에 돌면 영상이 섞인다. 여러 대로 확장하려면
 [multi-laptop-worker-pool.md](../specs/001-online-virtual-evaluation/multi-laptop-worker-pool.md)의
 설계를 먼저 반영해야 한다.
 
@@ -89,10 +89,20 @@ SESSION_HTTPS_ONLY=true
 ## 종료
 
 ```bash
-pkill -f 'worker.run'
-pkill -f 'cloudflared tunnel'
+kill $(pgrep -f '[w]orker.run')
+```
+
+```bash
+kill $(pgrep -f '[c]loudflared tunnel')
+```
+
+```bash
 docker compose down
 ```
+
+⚠️ `pkill -f 'worker.run'`을 쓰지 말 것. 그 명령을 실행한 셸 자신의 명령줄에도 `worker.run`이라는
+문자열이 들어 있어 **자기 자신까지 함께 죽는다** (2026-07-26 실제 발생). 위처럼 `pgrep`의 대괄호
+표기(`[w]orker`)로 PID를 먼저 찾아 종료하면 안전하다.
 
 ## DB 결과 조회 및 로그 확인
 
@@ -196,6 +206,103 @@ EOF
 | `storage/eval_logs/` | 시뮬레이션 로그 (실패 원인 추적용, 용량 크면 주기적으로 정리 가능) |
 
 DB와 `storage/`는 **반드시 함께** 백업/복원해야 한다. 한쪽만 복원하면 리더보드 기록과 실제 영상 파일이 어긋난다.
+
+### 자동 백업 (scripts/backup.sh)
+
+수동으로 기억해서 돌리는 백업은 결국 안 돌아간다. 아래 스크립트가 DB 덤프와 `storage/` 압축을
+한 번에 하고, 무결성 검사와 오래된 백업 정리까지 수행한다.
+
+```bash
+bash scripts/backup.sh
+```
+
+기본 동작
+- 저장 위치: `/mnt/c/Users/jjh03/drleader-backup` (Windows: `C:\Users\jjh03\drleader-backup`)
+- 담는 것: DB 덤프(gzip) + `storage/`(단 `work/`와 `models/` 제외)
+- 보관: 최근 14벌, 오래된 것부터 자동 삭제
+- 결과 요약은 `STATUS` 파일에, 실행 이력은 `backup.log`에 남는다
+
+**모델 파일을 기본 제외하는 이유**: 건당 약 250MB라 매일 담으면 디스크가 금방 찬다. 참가자가
+원본을 갖고 있어 재업로드가 가능하고, 보존 정책상 최고기록 것만 남는다. 포함하려면
+`BACKUP_INCLUDE_MODELS=true bash scripts/backup.sh`.
+
+바꿀 수 있는 값: `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_INCLUDE_MODELS`.
+
+**백업본을 노트북 밖으로 보내기**: Google Drive 데스크톱 → 설정 → **내 컴퓨터** → 폴더 추가 →
+`C:\Users\jjh03\drleader-backup`를 **"Google Drive에 백업"**으로 지정한다. Drive의 가상
+드라이브(G:)에는 WSL에서 직접 쓸 수 없어서, 로컬 폴더를 Drive가 올려가게 하는 방향으로 구성한다.
+⚠️ "내 드라이브 미러링"을 켜면 Drive 전체가 로컬로 내려와 C 드라이브가 꽉 찬다. 고르지 말 것.
+
+### 자동 실행 등록 (systemd 타이머)
+
+```bash
+sudo cp scripts/systemd/drleader-backup.* /etc/systemd/system/ && sudo chmod 644 /etc/systemd/system/drleader-backup.*
+```
+
+`chmod`이 필요한 이유: 유닛 파일이 `/mnt/c`(Windows 파일시스템)에 있어 권한이 777로 보이는데,
+systemd는 world-writable 유닛을 경고한다.
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now drleader-backup.timer
+```
+
+⚠️ 유닛 파일에는 사용자명(`jeonghun`)과 프로젝트 경로가 들어 있다. **다른 PC로 옮기면 그 환경에
+맞게 고쳐야 한다.**
+
+확인:
+
+```bash
+systemctl list-timers drleader-backup.timer
+```
+
+매일 04:00에 돈다. **노트북이 꺼져 있어 걸렀던 실행은 다음 부팅 직후 자동으로 따라잡는다**
+(`Persistent=true`). 24시간 켜두는 서버가 아니라 이 설정이 핵심이다.
+
+수동 실행과 로그 확인:
+
+```bash
+sudo systemctl start drleader-backup.service && journalctl -u drleader-backup.service -n 30
+```
+
+### 복원 절차
+
+⚠️ **운영 DB에 그대로 덮어쓰기 전에, 반드시 별도 DB에 먼저 복원해 내용을 확인한다.**
+
+1. 검증용 DB에 복원해 건수를 확인한다.
+
+```bash
+docker compose exec -T db psql -U drleader -d postgres -c "CREATE DATABASE drleader_restore_test;"
+```
+
+```bash
+gunzip -c ~/drleader-backup/db_YYYY-MM-DD.sql.gz | docker compose exec -T db psql -U drleader -d drleader_restore_test
+```
+
+```bash
+docker compose exec -T db psql -U drleader -d drleader_restore_test -c "SELECT (SELECT count(*) FROM teams) AS teams, (SELECT count(*) FROM submissions) AS submissions;"
+```
+
+2. 내용이 맞으면 운영 DB를 교체한다. **웹과 워커를 먼저 멈춘 뒤** 진행한다.
+
+```bash
+docker compose exec -T db psql -U drleader -d postgres -c "DROP DATABASE drleader;" -c "CREATE DATABASE drleader;"
+```
+
+```bash
+gunzip -c ~/drleader-backup/db_YYYY-MM-DD.sql.gz | docker compose exec -T db psql -U drleader -d drleader
+```
+
+3. `storage/`도 같은 날짜 것으로 함께 복원한다.
+
+```bash
+tar -xzf ~/drleader-backup/storage_YYYY-MM-DD.tar.gz -C /mnt/c/Users/jjh03/spg_deepracer_leaderboard
+```
+
+4. 검증용 DB를 정리한다.
+
+```bash
+docker compose exec -T db psql -U drleader -d postgres -c "DROP DATABASE drleader_restore_test;"
+```
 
 ## 저장 위치 — `/mnt/c` vs WSL ext4 (2026-07-26 검토, 현행 유지)
 

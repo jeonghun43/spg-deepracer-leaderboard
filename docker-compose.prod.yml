@@ -1,0 +1,65 @@
+# 클라우드 서버용 구성 (cloud-migration.md §3·§6).
+#
+# 노트북용 docker-compose.yml과의 차이:
+#   - 웹을 호스트 포트에 직접 노출하지 않는다. Caddy가 앞단에서 HTTPS로 받아 넘긴다.
+#   - DB 포트를 공개 인터넷에 열지 않는다. 워커는 Tailscale 사설망으로 접속한다.
+#   - 비밀값(DB 비밀번호·세션 시크릿·워커 토큰)을 .env에서 읽는다.
+#
+# 사용법: docker compose -f docker-compose.prod.yml up -d
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: drleader
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD를 .env에 설정하세요}
+      POSTGRES_DB: drleader
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # ports를 두지 않는다 — 5432는 상시 스캔 대상이라 공개 인터넷에 열지 않는다.
+    # 노트북 워커는 Tailscale 주소를 통해 아래 tailnet 바인딩으로 접속한다.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drleader"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://drleader:${POSTGRES_PASSWORD}@db:5432/drleader
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET을 .env에 설정하세요}
+      SESSION_HTTPS_ONLY: ${SESSION_HTTPS_ONLY:-true}
+      # 값이 설정되면 워커가 HTTP로 모델을 받고 영상을 올리는 방식으로 동작한다.
+      WORKER_TOKEN: ${WORKER_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./storage:/app/storage
+    expose:
+      - "8000"
+    # 개인 프로젝트를 같은 서버에 얹더라도 대회 서비스가 메모리 부족으로 죽지 않게 상한을 둔다.
+    mem_limit: 900m
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN을 .env에 설정하세요}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # 발급받은 인증서. 지우면 재발급 한도에 걸릴 수 있다
+      - caddy_config:/config
+    depends_on:
+      - web
+    mem_limit: 256m
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:

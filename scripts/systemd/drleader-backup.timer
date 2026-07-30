@@ -1,0 +1,16 @@
+[Unit]
+Description=DeepRacer 리더보드 데이터 백업 (하루 1회)
+
+[Timer]
+# 매일 새벽 4시. 평가가 도는 시간대를 피한다.
+OnCalendar=*-*-* 04:00:00
+
+# 이 노트북은 24시간 켜져 있지 않다. Persistent=true면 꺼져 있어 걸렀던 실행을
+# 다음 부팅 직후에 따라잡는다. 이 옵션이 없으면 새벽에 꺼둔 날은 백업이 통째로 빠진다.
+Persistent=true
+
+# 부팅 직후 몰리는 작업과 겹치지 않게 최대 15분 무작위 지연.
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

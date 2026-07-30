@@ -7,6 +7,7 @@ from app.db import get_db
 from app.models import Season, SeasonStatus, SubmissionStatus, Team
 from app.records import get_team_best
 from app.render import templates
+from app.worker_status import get_worker_status
 
 router = APIRouter(tags=["leaderboard"])
 
@@ -95,5 +96,10 @@ def season_leaderboard(season_id: int, request: Request, db: Session = Depends(g
     return templates.TemplateResponse(
         request,
         "leaderboard.html",
-        {"season": season, "ranked": ranked, "unranked": unranked},
+        {
+            "season": season,
+            "ranked": ranked,
+            "unranked": unranked,
+            "worker_status": get_worker_status(db),
+        },
     )

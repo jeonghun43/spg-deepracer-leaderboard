@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     model_upload_max_bytes: int = 500 * 1024 * 1024  # 500MB
     model_upload_allowed_extensions: tuple[str, ...] = (".tar.gz", ".zip")
 
+    # ── 워커가 웹과 다른 기기에서 돌 때 쓰는 설정 (cloud-migration.md §4) ──────────
+    # worker_token이 비어 있으면 웹과 워커가 같은 디스크를 공유하는 지금 방식(local 모드)으로
+    # 동작하고, 값이 설정되면 워커가 HTTP로 모델을 받고 영상을 올리는 방식으로 전환된다.
+    # 하나의 스위치로 두 배포 형태를 모두 지원해, 이관 전후로 코드를 바꾸지 않아도 되게 한다.
+    worker_token: str = ""
+    web_base_url: str = "http://localhost:8000"
+    video_upload_max_bytes: int = 200 * 1024 * 1024  # 200MB (실측 14MB 내외)
+    # 이 시간 안에 하트비트가 없으면 평가 서버가 멈춘 것으로 보고 화면에 안내한다.
+    worker_heartbeat_stale_minutes: int = 3
+
     @property
     def models_dir(self) -> Path:
         return self.storage_dir / "models"

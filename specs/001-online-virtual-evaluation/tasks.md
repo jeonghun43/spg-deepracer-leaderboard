@@ -175,6 +175,71 @@ Phase 3과 4는 Phase 2 완료 후 병렬 진행 가능. Phase 5는 Phase 4(큐/
 - [ ] **T076** (다음 평가 대기 중) 배포 후 실환경 확인 — 다음 평가 1건에서 13.8MB 영상이 `storage/videos/`에 저장되고 리더보드 "영상 보기"로 재생되는지, 그리고 그 팀의 이전 제출 파일이 정리되는지
 - [ ] **T077 [보류]** `storage/`를 WSL ext4로 이전 — 대회 종료 후 재검토. 장단점은 [operations.md](../../docs/operations.md) "저장 위치" 절 참고
 
+## Phase 10 — 웹 서버 상시 운영 (클라우드 이관, 2026-07-27 추가)
+
+> 노트북이 꺼져도 리더보드·로그인·제출이 24시간 동작하게 한다. 평가는 GPU/Docker가 필요해 무료 티어로 못 돌리므로 노트북에 남기고 **웹 + DB만** 옮긴다. 설계 근거·호스팅 비교·이관 절차는 [cloud-migration.md](cloud-migration.md).
+>
+> **선행 조건(운영자 직접)**: 클라우드 계정 + 카드 인증, 도메인 구매, Tailscale 계정. 계정 생성은 대행할 수 없다.
+>
+> 10-1·10-2는 **계정 준비와 무관하게 지금 할 수 있는 코드 작업**이고, 10-3부터가 실제 이관이다.
+
+### 10-1. 워커 ↔ 웹 파일 전송 경로
+- [x] **T078** `app/config.py`: `worker_token`(웹 쪽 검증용), `web_base_url`(워커 쪽 접속용) 설정 추가
+- [x] **T079** `app/routers/internal.py` 신규: `GET /internal/submissions/{id}/model` — 모델 아카이브 스트리밍 응답. `X-Worker-Token`을 `secrets.compare_digest`로 검증하고, 실패 시 404(존재 여부도 노출하지 않음)
+- [x] **T080** `app/routers/internal.py`: `POST /internal/submissions/{id}/video` — 결과 영상 업로드 후 `storage/videos/`에 저장하고 `EvaluationResult.video_path` 갱신
+- [x] **T081** `worker/run.py`: 모델을 로컬 디스크에서 읽는 대신 웹에서 내려받아 임시 디렉터리에서 평가하고, 끝나면 삭제. 영상은 업로드로 전송. **로컬(노트북)에 영구 저장하지 않는다**
+- [x] **T082** 워커가 웹과 통신하지 못할 때의 처리 — 재시도 후에도 실패하면 제출을 `queued`로 되돌려 다음 기회에 다시 잡히게 한다(제출을 잃지 않는다)
+
+### 10-2. 평가 서버 상태 표시
+- [x] **T083** `worker_heartbeats` 테이블 + Alembic 마이그레이션 (`worker_id` PK, `last_seen_at`)
+- [x] **T084** `worker/run.py`: 폴링 루프마다 하트비트 갱신
+- [x] **T085** `app/routers/submissions.py`·`leaderboard.py`: 최근 3분 내 하트비트가 없으면 "평가 서버 대기 중(마지막 응답 N분 전), 제출은 접수되며 재개 후 순차 처리" 배너 표시. 예상 대기 시간 문구도 이 상태에 맞게 변경
+- [x] **T086** 워커 중지 상태에서도 **제출은 계속 접수**되는지 확인 (참가자가 올려두고 퇴근할 수 있어야 한다)
+
+### 10-1·10-2 배포 기록 (2026-07-27)
+
+- 검증: `pytest tests/` 66개 통과 + 격리 DB 스모크 17개 통과 + 신규 마이그레이션 upgrade/downgrade 왕복 확인.
+- 배포: 대기열 0건에 `build web` → `up -d web`(마이그레이션 `c3e7a91b45d2` 적용) → 워커 재시작. 하트비트가 즉시 기록되는 것 확인.
+- **현행 배포는 `WORKER_TOKEN`이 비어 있어 local 모드로 동작한다** — 웹·워커가 같은 디스크를 쓰는 지금 구성이 그대로 유지되고, 이관 시점에 토큰을 설정하면 http 모드로 전환된다.
+- **운영 사고(무관한 원인)**: 이 배포 중에 Cloudflare quick tunnel 호스트명이 DNS에서 사라져 외부 접속이 끊겼다(`cloudflared` 프로세스는 살아 있었고 연결 재시도만 반복). Cloudflare가 quick tunnel을 회수한 것으로, 코드 배포와는 무관하다. 터널을 재시작해 복구했고 **주소가 바뀌어 재공지가 필요했다.** → Phase 10의 도메인 이전이 필요한 이유가 실제로 증명된 사례.
+
+### 10-3. 서버 준비 및 이관 (계정·도메인 준비 후)
+- [ ] **T087** VM 프로비저닝 — Docker 설치, 방화벽 80/443만 개방, Tailscale 연결
+- [ ] **T088** `docker-compose.yml`: db 포트를 tailnet 주소에만 바인딩(공개 인터넷 노출 금지), 리버스 프록시(Caddy/nginx) + Let's Encrypt HTTPS 추가
+- [ ] **T089** 도메인 A 레코드 연결, `SESSION_HTTPS_ONLY=true`, 새 `SESSION_SECRET`·`WORKER_TOKEN` 발급
+- [ ] **T090** 데이터 이전 — `pg_dump` 복원 + `storage/` 전송. **원본은 이관 검증이 끝날 때까지 보존**
+- [ ] **T091** 노트북 워커 재구성 — `DATABASE_URL`(tailnet), `WEB_BASE_URL`, `WORKER_TOKEN` 적용 후 재시작
+
+### 10-4. 검증
+- [ ] **T092** `pytest tests/` 통과 + 신규 테스트: 워커 토큰 인증(정상/오탐/미제시), 하트비트 만료 판정, 전송 실패 시 `queued` 복구
+- [ ] **T093** 이관 후 종단 검증 — 새 도메인으로 리더보드·로그인·제출, 노트북 워커가 모델을 내려받아 평가하고 영상이 리더보드에 재생되는지
+- [ ] **T094** 노트북 전원 차단 시나리오 — 웹은 계속 응답하고 제출이 접수되며 "대기 중" 배너가 뜨는지, 노트북 복귀 후 밀린 제출이 순차 처리되는지
+- [ ] **T095** 참가자 재공지 + 기존 `cloudflared` 종료. 롤백 절차(노트북 웹 재기동)를 문서대로 한 번 점검
+
+## Phase 11 — 백업 자동화 (2026-07-27 추가)
+
+> 지금 대회 데이터는 이 노트북 한 곳에만 있고 복사본이 없다. 특히 **DB는 Windows 폴더가 아니라 WSL 내부 Docker 볼륨에 있어 C 드라이브를 통째로 백업해도 들어가지 않는다.** 랩타임·순위는 한 번 잃으면 재현이 불가능하므로(모델·비밀번호는 재발급/재업로드가 가능) 최우선으로 보호한다.
+
+### 설계 결정
+
+- **저장 위치**: 기본값 `/mnt/c/Users/jjh03/drleader-backup` (Windows에서는 `C:\Users\jjh03\drleader-backup`). 환경변수 `BACKUP_DIR`로 바꿀 수 있다.
+  - OneDrive는 용량이 차서 사용할 수 없다(2026-07-27 확인).
+  - **Google Drive 가상 드라이브(G:)에는 직접 쓸 수 없다** — 실제 볼륨이 아니라 Drive 앱이 만든 가상 파일시스템이라 WSL에서 `/mnt/g`로 마운트되지 않는다(확인 완료). 그래서 **스크립트는 평범한 로컬 폴더에 쓰고, Google Drive 데스크톱의 "내 컴퓨터 폴더 백업" 기능으로 그 폴더를 Drive에 올린다.** 방향을 뒤집는 것이 가상 드라이브 문제를 피하는 가장 단순한 방법이다.
+  - 대안으로 `rclone`을 써서 WSL에서 Drive API로 직접 올릴 수도 있지만, OAuth 인증과 토큰 관리가 추가되어 인수인계 난이도가 올라간다. 채택하지 않는다.
+- **모델 파일은 기본 제외**. 건당 250MB(현재 2.5GB)라 매일 담으면 C 드라이브(여유 30GB)와 OneDrive 용량이 금방 찬다. 모델은 참가자 본인이 원본을 갖고 있어 재업로드가 가능하고, 보존 정책상 최고기록 것만 남는다. `BACKUP_INCLUDE_MODELS=true`로 켤 수 있게 한다.
+- **담는 것**: DB 덤프(gzip) + `storage/videos`·`metrics`·`eval_logs`. 영상은 재생성이 불가능하고(평가 때만 만들어짐) 용량도 팀당 14MB 수준이라 포함한다.
+- **주기·보관**: 하루 1회, 최근 14벌 유지 후 오래된 것부터 삭제. 최악의 경우 하루치 제출만 다시 받으면 된다.
+- **스케줄러**: cron이 아니라 **systemd 타이머**(이 WSL은 systemd가 돌고 있다). `Persistent=true`로 두어 노트북이 꺼져 있어 걸렀던 실행을 다음 부팅 때 따라잡게 한다 — 매일 켜져 있지 않은 노트북이라 이 옵션이 핵심이다.
+- **검증까지 포함**: 백업은 복원이 되어야 백업이다. 덤프가 비어 있지 않은지, gzip이 온전한지 매번 확인하고 결과를 로그에 남긴다.
+
+### 작업
+
+- [x] **T096** `scripts/backup.sh` 신규 — `pg_dump` → gzip, `storage/` 선택 압축(모델 제외 기본), 무결성 검사(`gunzip -t` + 크기 0 확인), 보관 기수 초과분 삭제, 실행 로그 기록
+- [x] **T097** 설정값 정리 — `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_INCLUDE_MODELS`를 환경변수로 받고 기본값을 스크립트 헤더와 [operations.md](../../docs/operations.md)에 문서화. **`.env.example`에는 넣지 않는다** — `.env`는 파이썬 앱(pydantic-settings)이 읽는 파일이고 셸 스크립트는 읽지 않으므로, 거기 적으면 '설정했는데 반영이 안 되는' 오해를 부른다. 값을 고정하려면 systemd 유닛의 `Environment=` 줄을 쓴다
+- [x] **T098** systemd 유닛 2개(`drleader-backup.service` / `.timer`) 작성 + 문법 검증 + 설치 절차 문서화. `Persistent=true`, 매일 04:00. **설치 명령 실행은 sudo 비밀번호가 필요해 운영자가 직접 해야 한다**(미완료 상태)
+- [x] **T099** 복원 절차 문서화 — [operations.md](../../docs/operations.md) "백업 대상" 절과 [handover.md](../../docs/handover.md) §6을 자동 백업 기준으로 갱신. **DB와 storage를 반드시 함께 복원**해야 한다는 점 명시
+- [x] **T100** 검증 — 실제로 1회 백업 실행 → 무결성 검사 통과, **격리 DB(`drleader_restore_test`)에 실제로 복원해 시즌·팀·제출 건수가 일치**하는지 확인, 보관 기수 초과분이 지워지는지 확인, 타이머가 등록·예약되는지 확인
+
 ---
 
 ## 범위 밖 (이번 STEP3에 포함하지 않음)

@@ -1,0 +1,11 @@
+{# 평가 서버(운영자 노트북)가 멈춰 있을 때의 안내 — cloud-migration.md §5.
+   제출은 계속 접수되므로 "고장"이 아니라 "대기 중"임을 분명히 한다. #}
+{% if worker_status and not worker_status.online %}
+<div class="card" style="border-color:#c98a00;">
+  <strong>평가 서버가 잠시 중지되어 있습니다.</strong>
+  <p class="muted" style="margin-bottom:0;">
+    제출은 정상적으로 접수되며, 서버가 재개되면 접수된 순서대로 처리됩니다.
+    {% if worker_status.minutes_ago is not none %}(마지막 응답: 약 {{ worker_status.minutes_ago }}분 전){% endif %}
+  </p>
+</div>
+{% endif %}
