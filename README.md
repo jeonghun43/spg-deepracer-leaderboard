@@ -50,19 +50,33 @@ cp -n .env.example .env
 
 `SESSION_SECRET`은 비어 있으면 안 된다. `python -c "import secrets; print(secrets.token_hex(32))"` 로 생성해서 넣는다.
 
-WSL2 Ubuntu에서:
+### 운영 중인 서비스 (2026-07-30 이후)
 
-```bash
-docker compose up -d
-```
+웹과 DB는 **클라우드 서버**(AWS Lightsail 서울)에서 24시간 돌고 있다.
+
+- 서비스: **https://spg-deepracer.doublejeong.com** · 관리자: `/admin`
+- 서버 접속·점검: [docs/server-access.md](docs/server-access.md)
+
+**노트북에서는 평가 워커만 띄운다.** DRFC 시뮬레이터가 노트북에 있기 때문이다.
 
 ```bash
 setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 ```
 
+워커는 `.env`의 `WORKER_TOKEN`이 설정돼 있으면 클라우드 서버에서 모델을 받아오는 방식으로 동작한다.
+자세한 절차는 [docs/operations.md](docs/operations.md), 대회 운영 전반은
+[docs/handover.md](docs/handover.md) 참고.
+
+### 로컬에서 전체를 띄워보려면 (개발·비상 복구용)
+
+```bash
+docker compose up -d
+```
+
 웹: http://localhost:8000 · 관리자: http://localhost:8000/admin
 
-자세한 기동/백업/제약 사항은 [docs/operations.md](docs/operations.md) 참고.
+> 이 방식은 개발용이거나 클라우드 서버를 못 쓰게 됐을 때의 비상 수단이다. 운영 데이터는
+> 클라우드 서버에 있으므로, 로컬로 되살리려면 백업 복원이 함께 필요하다.
 
 ## 참고 자료
 

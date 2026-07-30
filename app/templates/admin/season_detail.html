@@ -131,7 +131,7 @@
         {% if s.status.value == 'error' %}{{ s.error_message or '-' }}
         {% elif s.result %}
           {% if s.result.finish_status.value == 'finished' %}{{ "%.2f"|format(s.result.lap_time_seconds) }}초
-          {% else %}미완주{% endif %}
+          {% else %}{{ s.result | failure_summary }}{% endif %}
         {% else %}-{% endif %}
       </td>
     </tr>

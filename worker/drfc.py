@@ -142,6 +142,47 @@ def _find_model_root(extract_dir: Path) -> Path:
     return min(candidates, key=lambda p: len(p.relative_to(extract_dir).parts)).parent
 
 
+CHECKPOINT_INDEX_FILE = "deepracer_checkpoints.json"
+# DR_EVAL_CHECKPOINT가 이 값이면 아카이브 안에 해당 항목이 있어야 평가할 수 있다.
+# 특정 체크포인트 이름을 직접 지정한 경우는 검사하지 않는다(무엇이 맞는지 알 수 없다).
+_CHECKPOINT_KINDS = {"best": "best_checkpoint", "last": "last_checkpoint"}
+
+CHECKPOINT_MISSING_HELP = (
+    "압축 파일에서 평가에 쓸 체크포인트 정보를 찾을 수 없습니다.\n"
+    "이 대회는 학습 중 성적이 가장 좋았던 체크포인트(best)로 평가합니다. "
+    "DRFC 학습 결과의 model/ 폴더를 통째로 내보내면 그 정보가 함께 들어갑니다:\n"
+    "  aws s3 sync s3://$DR_LOCAL_S3_BUCKET/$DR_LOCAL_S3_MODEL_PREFIX/model/ ./my-model/ "
+    "$DR_LOCAL_PROFILE_ENDPOINT_URL\n"
+    "  tar -zcvf my-model.tar.gz ./my-model"
+)
+
+
+def validate_checkpoint_selection(model_root: Path) -> None:
+    """평가에 쓸 체크포인트가 아카이브 안에 실제로 있는지 미리 확인한다.
+
+    `DR_EVAL_CHECKPOINT=best`로 운영하는데 아카이브에 best 정보가 없으면, 시뮬레이터가
+    한참 뒤에 알 수 없는 오류로 죽어 참가자는 원인을 모른다. 여기서 먼저 걸러 한국어로 알린다.
+    **모델을 S3에 주입하기 전에 호출해야 한다** — 그래야 잘못된 제출이 이전 모델을 지우지 않는다.
+    """
+    kind = os.environ.get("DR_EVAL_CHECKPOINT", "last").strip().lower()
+    key = _CHECKPOINT_KINDS.get(kind)
+    if key is None:
+        return  # 특정 체크포인트를 직접 지정한 운영 — 검사 대상이 아니다
+
+    index_path = model_root / CHECKPOINT_INDEX_FILE
+    if not index_path.is_file():
+        raise EvaluationError(CHECKPOINT_MISSING_HELP)
+
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvaluationError(f"{CHECKPOINT_INDEX_FILE}을 읽을 수 없습니다: {exc}") from exc
+
+    entry = index.get(key) or {}
+    if not entry.get("name"):
+        raise EvaluationError(CHECKPOINT_MISSING_HELP)
+
+
 def inject_model(s3_client, archive_path: Path, work_dir: Path) -> None:
     """참가자가 올린 모델 아카이브(자신의 DRFC model/ 폴더를 압축한 것)를
     dr-start-evaluation이 읽는 S3 경로(model/)에 올린다. 기존 내용은 지운다.
@@ -160,6 +201,8 @@ def inject_model(s3_client, archive_path: Path, work_dir: Path) -> None:
         raise EvaluationError(f"모델 압축 파일을 열 수 없습니다: {exc}") from exc
 
     extract_dir = _find_model_root(extract_dir)
+    # 아래에서 기존 모델을 지우기 전에 검사한다 — 잘못된 제출이 이전 모델을 날리면 안 된다.
+    validate_checkpoint_selection(extract_dir)
 
     model_key_prefix = f"{prefix}/model/"
     existing = s3_client.list_objects_v2(Bucket=bucket, Prefix=model_key_prefix)
@@ -223,6 +266,75 @@ def download_video(s3_client, dest_path: Path) -> str | None:
             continue
         return key
     return None
+
+
+# SIM_TRACE_LOG의 필드 위치(0-based). DRFC 시뮬레이터가 매 스텝 찍는 로그로,
+# metrics json이 비어 있어도 여기에는 진행률과 종료 사유가 남는다.
+#   SIM_TRACE_LOG:episode,step,x,y,yaw,steer,throttle,action,reward,done,
+#                 all_wheels_on_track,progress,closest_waypoint,track_len,tstamp,episode_status,...
+SIM_TRACE_PROGRESS_INDEX = 11
+SIM_TRACE_STATUS_INDEX = 15
+# 주행이 시작되기 전 상태들. 실패 사유로 보여줄 값이 아니다.
+_NON_TERMINAL_STATUSES = {"in_progress", "prepare", "pause"}
+
+
+def extract_progress_from_log(log_path: Path) -> tuple[float | None, str | None]:
+    """평가 로그에서 최고 진행률과 종료 사유를 뽑는다.
+
+    metrics json이 비어 있는 경우(차가 한 바퀴도 못 끝냈을 때)에도 참가자에게 "어디까지
+    갔고 왜 멈췄는지"를 알려주기 위한 보조 경로다 (2026-07-30 submission 18에서 필요성 확인).
+    """
+    if not log_path.is_file():
+        return None, None
+
+    best_progress: float | None = None
+    last_status: str | None = None
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                marker = line.find("SIM_TRACE_LOG:")
+                if marker == -1:
+                    continue
+                fields = line[marker + len("SIM_TRACE_LOG:") :].strip().split(",")
+                if len(fields) <= SIM_TRACE_STATUS_INDEX:
+                    continue
+                try:
+                    progress = float(fields[SIM_TRACE_PROGRESS_INDEX])
+                except ValueError:
+                    continue
+                if best_progress is None or progress > best_progress:
+                    best_progress = progress
+                status = fields[SIM_TRACE_STATUS_INDEX].strip().lower().replace(" ", "_")
+                if status and status not in _NON_TERMINAL_STATUSES:
+                    last_status = status
+    except OSError:
+        return None, None
+
+    return best_progress, last_status
+
+
+def summarize_progress(
+    metrics: dict, log_path: Path | None = None
+) -> tuple[float | None, str | None]:
+    """참가자에게 보여줄 '최고 진행률'과 '종료 사유'를 정한다.
+
+    metrics의 trial 기록을 우선 쓰고, 비어 있으면 평가 로그로 넘어간다.
+    """
+    trials = metrics.get("metrics", [])
+    percentages = [
+        t["completion_percentage"] for t in trials if t.get("completion_percentage") is not None
+    ]
+    if percentages:
+        best = max(percentages)
+        statuses = [
+            str(t.get("episode_status", "")).strip().lower().replace(" ", "_") for t in trials
+        ]
+        terminal = [s for s in statuses if s and s not in _NON_TERMINAL_STATUSES]
+        return float(best), (terminal[-1] if terminal else None)
+
+    if log_path is not None:
+        return extract_progress_from_log(log_path)
+    return None, None
 
 
 def parse_evaluation_result(metrics: dict, required_laps: int) -> tuple[str, float | None, int]:

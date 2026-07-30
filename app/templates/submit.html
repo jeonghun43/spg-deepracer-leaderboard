@@ -53,7 +53,8 @@
     {% if latest_submission.result.finish_status.value == 'finished' %}
       <p>완주 — 랩타임 {{ "%.2f"|format(latest_submission.result.lap_time_seconds) }}초</p>
     {% else %}
-      <p>미완주 (시간 초과)</p>
+      <p>{{ latest_submission.result | failure_summary }}</p>
+      <p class="muted">{{ eval_laps }}바퀴를 모두 완주해야 기록으로 인정됩니다.</p>
     {% endif %}
   {% endif %}
 </div>

@@ -183,6 +183,10 @@ class EvaluationResult(Base):
     finish_status: Mapped[FinishStatus] = mapped_column(Enum(FinishStatus, native_enum=False, length=20))
     lap_time_seconds: Mapped[float | None] = mapped_column(nullable=True)
     off_track_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 완주하지 못했을 때 "어디까지 갔고 왜 멈췄는지"를 알려주기 위한 값.
+    # 이것이 없으면 화면이 모든 실패를 "시간 초과"로 뭉뚱그려 참가자가 원인을 오해한다.
+    best_progress_percent: Mapped[float | None] = mapped_column(nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
     video_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     metrics_raw_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     completed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

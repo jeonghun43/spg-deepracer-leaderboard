@@ -17,12 +17,15 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models import Submission
+from app.retention import prune_team_files
 from app.storage_paths import resolve_storage_path
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 # 인증 실패와 "없는 제출"을 같은 응답으로 돌려준다 (정보 노출 방지).
 NOT_FOUND = HTTPException(status_code=404, detail="Not Found")
+# metrics json은 정상이면 1KB 안팎이다. 넉넉히 잡되 무제한은 두지 않는다.
+MAX_METRICS_BYTES = 5 * 1024 * 1024
 
 
 def require_worker(x_worker_token: str | None = Header(default=None)) -> None:
@@ -87,3 +90,51 @@ async def upload_video(
     submission.result.video_path = rel_path
     db.commit()
     return {"video_path": rel_path, "bytes": size}
+
+
+@router.post("/submissions/{submission_id}/metrics")
+async def upload_metrics(
+    submission_id: int,
+    metrics: UploadFile = File(...),
+    _: None = Depends(require_worker),
+    db: Session = Depends(get_db),
+):
+    """DRFC가 만든 원본 metrics json을 서버에 보관한다.
+
+    MinIO의 원본은 다음 평가 때 같은 키로 덮어써지므로 이 사본이 유일한 기록이다.
+    워커(노트북)에만 두면 백업 대상에서 빠지므로 서버로 올려 함께 백업되게 한다.
+    """
+    submission = db.get(Submission, submission_id)
+    if submission is None:
+        raise NOT_FOUND
+
+    rel_path = f"{submission.team.season_id}/{submission.team_id}/{submission.id}.json"
+    dest_path = settings.metrics_dir / rel_path
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    content = await metrics.read()
+    if not content or len(content) > MAX_METRICS_BYTES:
+        raise HTTPException(status_code=400, detail="invalid metrics size")
+    dest_path.write_bytes(content)
+    return {"metrics_path": rel_path, "bytes": len(content)}
+
+
+@router.post("/submissions/{submission_id}/prune")
+def prune_submission_team(
+    submission_id: int,
+    _: None = Depends(require_worker),
+    db: Session = Depends(get_db),
+):
+    """이 제출이 속한 팀의 파일을 보존 정책대로 정리한다 (최고기록만 남긴다).
+
+    파일은 서버에 있으므로 정리도 서버에서 해야 한다. 워커가 자기 디스크를 지워봐야
+    서버의 250MB짜리 모델은 그대로 쌓인다 (2026-07-30 실제 발생).
+    """
+    submission = db.get(Submission, submission_id)
+    if submission is None:
+        raise NOT_FOUND
+
+    removed = prune_team_files(submission.team)
+    if removed:
+        db.commit()
+    return {"removed": removed}

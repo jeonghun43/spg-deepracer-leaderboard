@@ -153,3 +153,66 @@ def test_video_upload_failure_does_not_break_evaluation(http_mode, tmp_path, mon
 
     monkeypatch.setattr(transfer.httpx, "post", boom)
     assert transfer.deliver_video(7, local_video, "1/1/7.mp4") is None
+
+
+# ── 보존 정책·metrics 위임 (클라우드 분리 배포) ───────────────────────────
+
+
+def test_prune_is_delegated_to_server_in_http_mode(http_mode, monkeypatch):
+    """파일이 서버에 있으므로 정리도 서버가 해야 한다. 워커가 자기 디스크를 지워봐야
+    서버의 250MB 모델은 그대로 쌓인다 (2026-07-30 실제 발생한 문제)."""
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"removed": 2}
+
+    def fake_post(url, headers=None, timeout=None):
+        captured.update(url=url, headers=headers)
+        return FakeResponse()
+
+    monkeypatch.setattr(transfer.httpx, "post", fake_post)
+
+    assert transfer.request_prune(18) == 2
+    assert captured["url"].endswith("/internal/submissions/18/prune")
+    assert captured["headers"]["X-Worker-Token"] == "secret-token"
+
+
+def test_prune_failure_is_not_fatal(http_mode, monkeypatch):
+    """정리에 실패해도 평가 결과는 이미 저장돼 있다. 다음 평가에서 다시 정리된다."""
+
+    def boom(*args, **kwargs):
+        raise transfer.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(transfer.httpx, "post", boom)
+    assert transfer.request_prune(18) == 0
+
+
+def test_metrics_uploaded_in_http_mode(http_mode, tmp_path, monkeypatch):
+    metrics_file = tmp_path / "18.json"
+    metrics_file.write_text('{"metrics": []}', encoding="utf-8")
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"metrics_path": "1/1/18.json", "bytes": 15}
+
+    def fake_post(url, headers=None, files=None, timeout=None):
+        captured.update(url=url)
+        return FakeResponse()
+
+    monkeypatch.setattr(transfer.httpx, "post", fake_post)
+
+    assert transfer.deliver_metrics(18, metrics_file) is True
+    assert captured["url"].endswith("/internal/submissions/18/metrics")
+
+
+def test_metrics_upload_skipped_in_local_mode(storage, tmp_path):
+    """같은 디스크면 이미 제자리에 쓰여 있으므로 전송할 필요가 없다."""
+    metrics_file = tmp_path / "18.json"
+    metrics_file.write_text('{"metrics": []}', encoding="utf-8")
+    assert transfer.deliver_metrics(18, metrics_file) is True

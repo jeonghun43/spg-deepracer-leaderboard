@@ -1,7 +1,18 @@
-# 운영 가이드 (온라인 평가 플랫폼)
+# 운영 가이드 (평가 워커 · 노트북 쪽)
 
-현재 구성: **Windows 노트북 + WSL2 Ubuntu**. DB와 웹 앱은 Docker로, 평가 워커는 WSL 호스트에서 직접 실행한다
-(워커가 호스트의 DRFC Docker Swarm을 제어해야 하므로 컨테이너 안에 두지 않는다).
+**현재 구성 (2026-07-30 이후)**: 웹과 DB는 **클라우드 서버**(AWS Lightsail 서울)에서 24시간 돌고,
+이 노트북에는 **평가 워커와 DRFC만** 남아 있다. 워커가 호스트의 DRFC Docker Swarm을 제어해야 해서
+컨테이너에 넣지 않는다.
+
+| 무엇을 | 어디서 | 문서 |
+|---|---|---|
+| 웹·DB·HTTPS | 클라우드 서버 | [server-access.md](server-access.md) |
+| 평가 워커·DRFC | 이 노트북 (WSL2) | **이 문서** |
+| 백업 실행 | 이 노트북 → 서버에서 끌어옴 | 이 문서 "자동 백업" |
+
+> 이전 완료 기록: 2026-07-30에 웹·DB를 클라우드로 옮겼고, **노트북의 웹·DB 컨테이너는 정지했다**
+> (`docker compose stop`). 데이터와 볼륨은 이전 검증용으로 그대로 남겨두었다. MinIO는 DRFC 평가에
+> 필요하므로 계속 떠 있어야 한다.
 
 ## 사전 준비 (최초 1회)
 
@@ -13,21 +24,20 @@ python3 -m venv .venv
 
 DRFC(`~/deepracer-for-cloud`)는 이미 설정되어 있다고 가정한다.
 
+`.env`에는 **클라우드 서버를 가리키는 값**이 들어 있어야 한다(워커 전용).
+
+```
+DATABASE_URL=postgresql+psycopg2://drleader:<비밀번호>@100.110.139.82:5432/drleader
+WEB_BASE_URL=https://spg-deepracer.doublejeong.com
+WORKER_TOKEN=<서버 .env의 값과 동일>
+```
+
+`WORKER_TOKEN`이 설정되면 워커가 자동으로 **http 전송 모드**로 동작한다 — 모델을 서버에서
+내려받고 영상·metrics를 서버로 올린다. 비어 있으면 같은 디스크를 쓰는 옛 방식으로 동작한다.
+
 ## 기동 절차
 
-### 1. DB + 웹 앱 기동
-
-```bash
-docker compose up -d
-```
-
-최초 1회는 관리자 계정도 만든다.
-
-```bash
-docker compose exec web python -m app.seed admin <원하는_비밀번호>
-```
-
-### 2. 평가 워커 기동
+### 1. 평가 워커 기동
 
 ```bash
 setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
@@ -45,7 +55,25 @@ S3의 고정 키(`.../mp4/camera-pip/0-video.mp4` 등 카메라 앵글별 고정
 [multi-laptop-worker-pool.md](../specs/001-online-virtual-evaluation/multi-laptop-worker-pool.md)의
 설계를 먼저 반영해야 한다.
 
-### 3. 외부 공개 (Cloudflare Tunnel)
+### 2. 클라우드 서버 확인
+
+웹은 노트북과 무관하게 이미 돌고 있다. 상태만 확인하면 된다.
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://spg-deepracer.doublejeong.com/healthz
+```
+
+서버에 직접 들어가는 방법과 점검 명령은 [server-access.md](server-access.md)에 있다.
+
+---
+
+## [과거 방식 · 현재 미사용] 외부 공개 (Cloudflare Tunnel)
+
+> ⚠️ **평상시에는 쓰지 않는다.** 지금은 클라우드 서버 + 도메인(`spg-deepracer.doublejeong.com`)으로
+> 공개한다. 아래는 **클라우드 서버를 못 쓰게 됐을 때 노트북만으로 급히 서비스를 되살리는 비상
+> 수단**으로 남겨둔다. 이 방식은 주소가 매번 바뀌고 노트북이 절전에 들어가면 끊긴다(2026-07-27 실제 발생).
+>
+> 비상 복구 시에는 노트북의 웹·DB를 다시 띄우고(`docker compose up -d`) 백업을 복원한 뒤 아래 터널을 실행한다.
 
 참가자가 다른 네트워크에서도 접속할 수 있게 하려면 터널을 띄운다. 최초 1회만 설치한다.
 
@@ -217,16 +245,30 @@ bash scripts/backup.sh
 ```
 
 기본 동작
+- **원본: 클라우드 서버**(`ubuntu@15.164.198.36`의 `~/drleader`). 이 스크립트는 노트북에서 돌면서
+  SSH로 서버의 DB와 `storage/`를 끌어온다.
 - 저장 위치: `/mnt/c/Users/jjh03/drleader-backup` (Windows: `C:\Users\jjh03\drleader-backup`)
 - 담는 것: DB 덤프(gzip) + `storage/`(단 `work/`와 `models/` 제외)
 - 보관: 최근 14벌, 오래된 것부터 자동 삭제
 - 결과 요약은 `STATUS` 파일에, 실행 이력은 `backup.log`에 남는다
 
+**왜 서버에서 직접 돌리지 않고 노트북으로 끌어오나**: 서버가 통째로 사라지는 상황(계정 정지,
+인스턴스 삭제, 결제 실패)이 백업이 가장 필요한 순간인데, 백업본이 그 서버 안에 있으면 함께
+사라진다. 노트북으로 끌어와 Google Drive에 올려두면 **서버·노트북·Drive 세 곳 중 둘이 죽어도**
+데이터가 남는다. 단, 노트북이 오래 꺼져 있으면 백업도 멈추므로 `STATUS` 파일을 가끔 확인한다.
+
+**노트북 자체를 백업하려면** `BACKUP_SOURCE=local bash scripts/backup.sh`. 클라우드 이전 전의
+옛 데이터를 받아둘 때 쓴다.
+
 **모델 파일을 기본 제외하는 이유**: 건당 약 250MB라 매일 담으면 디스크가 금방 찬다. 참가자가
 원본을 갖고 있어 재업로드가 가능하고, 보존 정책상 최고기록 것만 남는다. 포함하려면
 `BACKUP_INCLUDE_MODELS=true bash scripts/backup.sh`.
 
-바꿀 수 있는 값: `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_INCLUDE_MODELS`.
+바꿀 수 있는 값: `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_INCLUDE_MODELS`, `BACKUP_SOURCE`,
+`BACKUP_REMOTE_HOST`, `BACKUP_REMOTE_DIR`.
+
+⚠️ **서버 IP나 접속 계정이 바뀌면 `BACKUP_REMOTE_HOST`를 반드시 함께 고쳐야 한다.** 안 고치면
+백업이 조용히 실패하고, 그 사실은 `STATUS` 파일을 열어봐야만 드러난다.
 
 **백업본을 노트북 밖으로 보내기**: Google Drive 데스크톱 → 설정 → **내 컴퓨터** → 폴더 추가 →
 `C:\Users\jjh03\drleader-backup`를 **"Google Drive에 백업"**으로 지정한다. Drive의 가상
@@ -344,6 +386,10 @@ docker compose exec -T db psql -U drleader -d postgres -c "DROP DATABASE drleade
 >
 > - 형식: `.zip` 또는 `.tar.gz` (최대 500MB)
 > - 압축 안에 `model_metadata.json`과 체크포인트 파일들이 있어야 합니다.
+> - **평가는 학습 중 성적이 가장 좋았던 체크포인트(best)로 진행됩니다.** 위 명령으로 `model/`
+>   폴더를 통째로 내보내면 그 정보(`deepracer_checkpoints.json`)가 함께 들어갑니다. 체크포인트를
+>   골라 담거나 이 파일을 빼면 평가할 수 없습니다.
+> - 기록은 **3바퀴 합계 시간**입니다. 3바퀴를 모두 완주해야 순위에 오릅니다.
 > - ⚠️ **MinIO 데이터 폴더를 직접 압축하면 안 됩니다.** MinIO는 오브젝트를
 >   "폴더 + `xl.meta`" 형태로 디스크에 저장하기 때문에, 그 폴더를 그대로 압축하면
 >   파일 이름은 그럴듯해 보여도 실제 모델 데이터가 들어가지 않습니다.

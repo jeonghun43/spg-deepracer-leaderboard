@@ -11,25 +11,31 @@
 
 ## 2. 전체 아키텍처
 
+> **갱신 (2026-07-30)**: 아래 구조는 그대로 유지되지만, 웹·DB가 **클라우드 서버로 분리**되면서
+> 배치가 두 대로 나뉘었다. 이전 배경·설계는 [cloud-migration.md](cloud-migration.md) 참고.
+> Cloudflare Tunnel은 도메인 기반 HTTPS로 대체되어 더 이상 운영에 쓰지 않는다.
+
 ```
-[참가자/관리자/관전자 브라우저] (LAN 안이든 밖이든 무관)
-          │  HTTPS
+[참가자/관리자/관전자 브라우저]
+          │  HTTPS (spg-deepracer.doublejeong.com)
           ▼
-   [Cloudflare Tunnel (cloudflared)]  ── 공유기 포트포워딩/고정 공인 IP 불필요
-          │  HTTP (로컬 구간)
-          ▼
-   [웹 애플리케이션] ── PostgreSQL (팀·시즌·제출·기록 메타데이터)
-          │                     
-          │ 제출 등록          
-          ▼
-   [평가 대기열 (DB 테이블 기반)]
+┌─ 클라우드 서버 (AWS Lightsail 서울, 상시 가동) ────────────────┐
+│  [Caddy] ── 인증서 자동 발급/갱신                              │
+│      ▼                                                         │
+│  [웹 애플리케이션] ── PostgreSQL (팀·시즌·제출·기록)           │
+│      │                    └ [평가 대기열 = DB 테이블]          │
+│      └ 디스크: 모델 원본 / 평가 영상 / metrics                 │
+└────────────────────────────────────────────────────────────────┘
+          ↑ Tailscale 사설망(DB) · HTTPS + 토큰(/internal 모델·영상 전송)
           │
-          ▼
-   [평가 워커 프로세스] ── dr-start-evaluation(DRFC, Docker) 실행
-          │
-          ▼
-   [로컬 디스크] ── 모델 파일 원본 / 평가 결과 영상 / 로그
+┌─ 운영자 노트북 (켜져 있을 때만) ───────────────────────────────┐
+│  [평가 워커] ── dr-start-evaluation(DRFC, Docker) ── MinIO     │
+└────────────────────────────────────────────────────────────────┘
 ```
+
+**분리한 이유**: 노트북이 꺼지면 리더보드까지 함께 죽었다. 반대로 평가는 시뮬레이터 하나가
+2.26GB를 쓰고 CPU 3코어를 점유해 저가 클라우드 서버로는 돌릴 수 없다. 그래서 **가벼운 웹만
+클라우드로 올리고 무거운 평가는 노트북에 남겼다.**
 
 - **웹 애플리케이션**: 참가자 제출 페이지, 공개 리더보드, 관리자 페이지를 모두 제공하는 단일 서비스.
 - **평가 대기열**: 별도 메시지 브로커(Redis/RabbitMQ 등) 없이 **DB 테이블을 큐로 사용**한다. 어차피 평가는 서버 한 대에서 순차 실행되는 것을 전제하므로(동시에 여러 dr-start-evaluation을 돌리는 것은 리소스상 무리), 큐 인프라를 추가하는 것보다 "대기중 → 실행중 → 완료/실패" 상태를 가진 테이블 + 워커의 폴링 방식이 훨씬 단순하고 운영 부담이 적다.
@@ -133,14 +139,16 @@ STEP2 작성 시점에는 "dr-start-evaluation을 호출한다" 정도로만 적
 - 관리자 페이지는 팀 계정과 분리된 별도 권한(관리자 계정)으로 접근한다.
 - **공인 인터넷 노출에 따른 추가 조치** (2026-07-25, [deployment-public-access.md](deployment-public-access.md) 참고):
   - `SESSION_SECRET`은 기본값(`change-me-in-production`)을 절대 그대로 쓰지 않고, 운영 전 `.env`에 무작위 값을 설정한다.
-  - 세션 쿠키의 HTTPS 강제 여부는 `SESSION_HTTPS_ONLY` 환경변수(기본 `false`)로 제어한다. 실제 대회를 Cloudflare Tunnel로 운영할 때는 `.env`에 `SESSION_HTTPS_ONLY=true`를 설정한다 — 단, 터널 없이 `http://localhost:8000`으로 직접 접속하는 로컬 테스트/관리 작업 중에는 `false`로 둬야 로그인이 정상 동작한다.
-  - DB(PostgreSQL) 포트(5432)는 공인 인터넷에 노출하지 않는다 — Cloudflare Tunnel은 `web` 컨테이너의 HTTP 포트만 중계하고, DB는 계속 로컬(WSL 호스트)에서만 접근 가능하게 둔다.
+  - 세션 쿠키의 HTTPS 강제 여부는 `SESSION_HTTPS_ONLY` 환경변수(기본 `false`)로 제어한다. **현재 운영 서버는 `true`** (도메인 + Let's Encrypt HTTPS). `http://localhost:8000`으로 직접 접속하는 로컬 테스트에서는 `false`로 둬야 브라우저가 Secure 쿠키를 저장해 로그인이 동작한다.
+  - DB(PostgreSQL) 포트(5432)는 공인 인터넷에 노출하지 않는다. **현재는 Tailscale 사설망 주소에만 바인딩한다** (`docker-compose.prod.yml`의 `${DB_BIND_ADDRESS}`, 값이 없으면 루프백으로 떨어져 외부에서 접근 불가). 노트북 워커는 이 사설망을 통해서만 DB에 접속한다.
 
 ## 7. 배포/운영 개요
 
 - Docker Compose로 `웹 앱 컨테이너 + PostgreSQL 컨테이너`를 함께 기동한다. 평가 워커와 DRFC는 (기존 결정대로) 컨테이너가 아니라 WSL 호스트에서 직접 실행한다.
 - 로그·모델 파일·영상은 모두 호스트에 볼륨 마운트해 컨테이너 재시작에도 유실되지 않도록 한다.
-- **외부 접속**: 도메인을 별도로 구입하지 않는 한, `cloudflared`의 Quick Tunnel(`cloudflared tunnel --url http://localhost:8000`)로 `web` 컨테이너의 8000번 포트만 공인 인터넷에 노출한다. 공유기 포트포워딩이나 고정 공인 IP가 필요 없다. 절차는 [deployment-public-access.md](deployment-public-access.md) 참고. 노트북(WSL)과 `cloudflared` 프로세스가 대회 기간 내내 켜져 있어야 하며, 이는 평가 워커가 어차피 같은 노트북에서 상시 실행돼야 하는 것과 동일한 제약이다.
+- ~~**외부 접속**: 도메인을 별도로 구입하지 않는 한, `cloudflared`의 Quick Tunnel로 `web` 컨테이너의 8000번 포트만 공인 인터넷에 노출한다.~~
+  → **대체됨 (2026-07-30)**: 노트북이 절전·종료될 때마다 터널 주소가 영구히 사라지는 문제가 두 번 발생해, 웹·DB를 클라우드 서버로 옮기고 구입 도메인 + Caddy(Let's Encrypt)로 공개하도록 바꿨다. 배포 구성은 `docker-compose.prod.yml`, 절차와 배경은 [cloud-migration.md](cloud-migration.md), 서버 운용은 [server-access.md](../../docs/server-access.md) 참고.
+- **현재 배포**: 클라우드 서버에서 `Caddy + 웹 + PostgreSQL`을 Docker Compose로 기동하고, 평가 워커와 DRFC는 운영자 노트북에서 실행한다. 두 대는 Tailscale 사설망(DB)과 토큰 인증 HTTPS 엔드포인트(모델·영상 전송)로 연결된다.
 
 ## 8. 열린 질문 / 리스크 (STEP3 전 확인 필요)
 

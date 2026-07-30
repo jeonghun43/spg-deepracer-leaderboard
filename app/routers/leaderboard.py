@@ -12,6 +12,24 @@ from app.worker_status import get_worker_status
 router = APIRouter(tags=["leaderboard"])
 
 
+def _best_attempt(team: Team):
+    """완주하지 못한 팀의 시도 중 가장 멀리 간 결과를 고른다.
+
+    진행률이 기록되지 않은 예전 결과(NULL)만 있으면 None을 돌려주고, 화면은 그때
+    진행률 없이 표시한다.
+    """
+    attempts = [
+        s.result
+        for s in team.submissions
+        if s.status == SubmissionStatus.DONE
+        and s.result is not None
+        and getattr(s.result, "best_progress_percent", None) is not None
+    ]
+    if not attempts:
+        return None
+    return max(attempts, key=lambda r: r.best_progress_percent)
+
+
 def build_leaderboard(db: Session, season: Season):
     """완주 기록이 있는 팀은 랩타임 오름차순(가장 빠른 팀이 1위)으로, 없는 팀은 별도 목록으로 반환한다."""
     teams = db.execute(
@@ -40,7 +58,15 @@ def build_leaderboard(db: Session, season: Season):
                 }
             )
         else:
-            unranked.append({"team": team, "total_submissions": total_submissions})
+            # 완주 기록이 없는 팀에게도 "어디까지 갔는지"는 보여준다. 아무 정보도 없으면
+            # 참가자가 자기 모델이 어느 정도인지 가늠할 수 없다.
+            unranked.append(
+                {
+                    "team": team,
+                    "total_submissions": total_submissions,
+                    "best_attempt": _best_attempt(team),
+                }
+            )
 
     # 랩타임 오름차순(가장 빠른 팀이 1위). 완전히 같은 랩타임이면 그 기록을 먼저 세운
     # 팀이 상위 — plan.md §5.2.

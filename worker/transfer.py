@@ -111,3 +111,59 @@ def deliver_video(submission_id: int, local_video: Path, video_rel_path: str) ->
         )
         return None
     return response.json().get("video_path", video_rel_path)
+
+
+def deliver_metrics(submission_id: int, local_metrics: Path) -> bool:
+    """원본 metrics json을 최종 위치로 보낸다.
+
+    MinIO의 원본은 다음 평가에 덮어써지므로 이 사본이 유일한 기록이다. 워커에만 두면
+    백업(서버 기준)에서 빠지므로 http 모드에서는 서버로 올린다.
+    """
+    if not local_metrics.is_file():
+        return False
+    if not uses_http():
+        return True  # 이미 서버와 같은 디스크에 쓰여 있다
+
+    url = f"{settings.web_base_url.rstrip('/')}/internal/submissions/{submission_id}/metrics"
+    try:
+        with open(local_metrics, "rb") as f:
+            response = httpx.post(
+                url,
+                headers=_headers(),
+                files={"metrics": (local_metrics.name, f, "application/json")},
+                timeout=TRANSFER_TIMEOUT,
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("metrics 업로드 실패(무시하고 진행): submission=%s %s", submission_id, exc)
+        return False
+    if response.status_code != 200:
+        logger.warning(
+            "metrics 업로드 거부(무시하고 진행): submission=%s HTTP %s",
+            submission_id,
+            response.status_code,
+        )
+        return False
+    return True
+
+
+def request_prune(submission_id: int) -> int:
+    """서버에 보존 정책 적용을 요청하고 삭제된 파일 수를 돌려준다.
+
+    파일이 서버에 있으므로 워커가 직접 지울 수 없다. 실패해도 평가 결과에는 영향이 없으므로
+    예외를 올리지 않는다 — 다음 평가에서 다시 정리된다.
+    """
+    url = f"{settings.web_base_url.rstrip('/')}/internal/submissions/{submission_id}/prune"
+    try:
+        response = httpx.post(url, headers=_headers(), timeout=TRANSFER_TIMEOUT)
+    except httpx.HTTPError as exc:
+        logger.warning("보존 정책 요청 실패: submission=%s %s", submission_id, exc)
+        return 0
+    if response.status_code != 200:
+        logger.warning(
+            "보존 정책 요청 거부: submission=%s HTTP %s", submission_id, response.status_code
+        )
+        return 0
+    removed = response.json().get("removed", 0)
+    if removed:
+        logger.info("서버 보존 정책 적용: submission=%s 파일 %s개 삭제", submission_id, removed)
+    return removed
