@@ -1,7 +1,8 @@
 import datetime as dt
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.requests import ClientDisconnect
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,21 @@ from app.storage_paths import to_storage_relative
 from app.worker_status import get_worker_status
 
 router = APIRouter(tags=["submissions"])
+
+
+def wants_json_response(accept_header: str | None) -> bool:
+    """이 요청에 JSON으로 답해야 하는가 (upload-progress-ux.md §2-4).
+
+    진행률을 표시하는 업로드 스크립트는 `Accept: application/json`을 명시해서 보낸다.
+    그 외(일반 폼 전송, `*/*`만 보내는 클라이언트)는 지금까지와 똑같이 303 리다이렉트를
+    받는다 — 스크립트가 없어도 제출이 되어야 하기 때문이다.
+    """
+    if not accept_header:
+        return False
+    return any(
+        part.split(";", 1)[0].strip().lower() == "application/json"
+        for part in accept_header.split(",")
+    )
 
 
 def _queue_position(db: Session, submission: Submission) -> int:
@@ -63,6 +79,10 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
             "can_submit": can_submit,
             "eval_laps": settings.online_eval_laps,
             "worker_status": get_worker_status(db),
+            # 업로드 스크립트가 전송 전에 파일을 검사할 때 쓰는 값. 규칙의 출처는
+            # config.py 하나로 유지하려고 화면에 내려보낸다 (upload-progress-ux.md §2-5).
+            "upload_max_bytes": settings.model_upload_max_bytes,
+            "allowed_extensions": settings.model_upload_allowed_extensions,
             "error": request.query_params.get("error"),
         },
     )
@@ -76,8 +96,13 @@ async def submit_upload(
     model_file: UploadFile | None = File(None),
 ):
     season: Season = team.season
+    as_json = wants_json_response(request.headers.get("accept"))
 
-    def redirect_with_error(message: str) -> RedirectResponse:
+    def redirect_with_error(message: str) -> JSONResponse | RedirectResponse:
+        # 스크립트로 올린 경우엔 화면을 갈아끼우지 않고 그 자리에서 안내한다.
+        # 리다이렉트로 답하면 고른 파일이 사라져 참가자가 처음부터 다시 해야 한다.
+        if as_json:
+            return JSONResponse({"ok": False, "error": message}, status_code=400)
         return RedirectResponse(f"/submit?error={message}", status_code=303)
 
     if team.disqualified:
@@ -104,15 +129,21 @@ async def submit_upload(
     dest_path = dest_dir / f"{timestamp}_{model_file.filename}"
 
     size = 0
-    with open(dest_path, "wb") as out:
-        while chunk := await model_file.read(1024 * 1024):
-            size += len(chunk)
-            if size > settings.model_upload_max_bytes:
-                out.close()
-                dest_path.unlink(missing_ok=True)
-                max_mb = settings.model_upload_max_bytes // (1024 * 1024)
-                return redirect_with_error(f"파일 용량이 너무 큽니다 (최대 {max_mb}MB).")
-            out.write(chunk)
+    try:
+        with open(dest_path, "wb") as out:
+            while chunk := await model_file.read(1024 * 1024):
+                size += len(chunk)
+                if size > settings.model_upload_max_bytes:
+                    out.close()
+                    dest_path.unlink(missing_ok=True)
+                    max_mb = settings.model_upload_max_bytes // (1024 * 1024)
+                    return redirect_with_error(f"파일 용량이 너무 큽니다 (최대 {max_mb}MB).")
+                out.write(chunk)
+    except ClientDisconnect:
+        # 참가자가 업로드 도중 취소하거나 창을 닫으면 여기로 온다. 절반짜리 파일을
+        # 남겨두면 아무도 쓰지 않으면서 디스크만 차지한다 (250MB짜리다).
+        dest_path.unlink(missing_ok=True)
+        raise
 
     if size == 0:
         dest_path.unlink(missing_ok=True)
@@ -128,4 +159,6 @@ async def submit_upload(
     db.add(submission)
     db.commit()
 
+    if as_json:
+        return JSONResponse({"ok": True, "redirect": "/submit"})
     return RedirectResponse("/submit", status_code=303)

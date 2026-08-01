@@ -25,12 +25,34 @@
     {% endif %}
     <p class="muted">이 제출의 결과가 나오기 전까지는 새 모델을 업로드할 수 없습니다.</p>
   {% elif can_submit %}
-    <form method="post" action="/submit" enctype="multipart/form-data">
+    {# 진행률 표시는 upload.js가 이 form의 submit을 가로채서 얹는다. 스크립트가 없거나
+       로딩에 실패하면 아래 form이 그대로 전송되어 지금까지와 똑같이 제출된다
+       (upload-progress-ux.md §2-3). 검증 규칙 값은 서버에서 내려받아 config.py를
+       유일한 출처로 유지한다. #}
+    <form method="post" action="/submit" enctype="multipart/form-data" id="submit-form"
+          data-max-bytes="{{ upload_max_bytes }}"
+          data-allowed-ext="{{ allowed_extensions|join(',') }}">
       <div class="field">
-        <label for="model_file">모델 파일 (.zip 또는 .tar.gz)</label>
+        <label for="model_file">모델 파일 ({{ allowed_extensions|join(' 또는 ') }})</label>
+        {# accept 속성은 일부러 두지 않는다 — .tar.gz를 브라우저마다 다르게 해석해서
+           정상 파일이 파일 선택창에서 안 보이는 사고가 난다. 검사는 아래 스크립트가 한다. #}
         <input type="file" id="model_file" name="model_file" required>
+        <p class="muted file-info" id="file-info" hidden></p>
       </div>
-      <button type="submit">제출하기</button>
+      <p class="muted">
+        모델 파일은 보통 250MB 안팎입니다. 인터넷 속도에 따라 업로드에 <strong>20초에서 수 분</strong>까지 걸릴 수 있습니다.
+        업로드가 끝날 때까지 이 페이지를 닫지 마세요.
+      </p>
+      <p class="error" id="upload-error" hidden></p>
+      <div class="upload-progress" id="upload-progress" hidden>
+        <div class="progress-track" id="progress-track" role="progressbar"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="모델 업로드 진행률">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <p class="muted progress-text" id="progress-text" aria-live="polite">업로드 준비 중…</p>
+      </div>
+      <button type="submit" id="submit-button">제출하기</button>
+      <button type="button" class="secondary" id="cancel-button" hidden>업로드 취소</button>
     </form>
   {% else %}
     <p class="muted">
@@ -62,4 +84,8 @@
 
 <p><a href="/leaderboard/{{ season.id }}">이 시즌 리더보드 보러가기 →</a></p>
 <p><a href="/logout">로그아웃</a></p>
+{% endblock %}
+
+{% block scripts %}
+{% if can_submit %}<script src="/static/upload.js" defer></script>{% endif %}
 {% endblock %}

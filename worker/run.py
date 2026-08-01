@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -79,14 +79,34 @@ def claim_next_submission(db: Session) -> int | None:
 
 
 def recover_stale_running(db: Session) -> None:
-    """워커가 중간에 죽어 '평가중'에 멈춰있는 제출을 재시작 시 다시 대기열로 되돌린다."""
+    """워커가 중간에 죽어 '평가중'에 멈춰있는 제출을 재시작 시 다시 대기열로 되돌린다.
+
+    되돌리는 대상은 두 가지다.
+
+    1. **내 worker_id로 잡혀 있는 것** — 시간과 무관하게 즉시 되돌린다.
+       이 함수는 main() 진입 시에만 불리므로, 내 이름표가 붙은 '평가중'이 남아 있다는 것은
+       이전 생애의 내가 그 평가를 끝내지 못하고 죽었다는 뜻이다. 지금 이 프로세스는 그 작업을
+       이어받을 수 없으니 시간을 볼 이유가 없다.
+       (EC2 스팟에서 필요하다: 회수로 인스턴스가 중지됐다가 35분 안에 복귀하면 아래 2번
+       기준에 걸리지 않아 그 제출이 영구히 '평가중'에 갇혔다. worker-server-setup.md §8.7)
+    2. **다른 워커가 잡은 채 오래된 것** — 평가 최대 시간 + 5분이 지난 것만 되돌린다.
+       그 워커가 지금도 정상 처리 중일 수 있으므로 시간 기준이 반드시 필요하다.
+    """
     threshold = now_utc() - dt.timedelta(seconds=MAX_WAIT_SECONDS + 300)
     stale = db.query(Submission).filter(
         Submission.status == SubmissionStatus.RUNNING,
-        Submission.started_at < threshold,
+        or_(
+            Submission.worker_id == WORKER_ID,
+            Submission.started_at < threshold,
+        ),
     ).all()
     for submission in stale:
-        logger.warning("오래된 '평가중' 제출을 대기열로 되돌립니다: submission=%s", submission.id)
+        logger.warning(
+            "'평가중'에 멈춰있던 제출을 대기열로 되돌립니다: submission=%s (worker_id=%s, started_at=%s)",
+            submission.id,
+            submission.worker_id,
+            submission.started_at,
+        )
         submission.status = SubmissionStatus.QUEUED
         submission.worker_id = None
         submission.started_at = None

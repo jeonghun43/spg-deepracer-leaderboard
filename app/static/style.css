@@ -66,6 +66,25 @@ button, input[type=submit] {
 button.secondary { background: #33394a; }
 button.danger { background: #a6323a; }
 .error { color: #ff8b8b; margin: 8px 0; }
+/* 모델 업로드 진행 표시 (upload-progress-ux.md) */
+.upload-progress { margin: 12px 0 16px; max-width: 480px; }
+.progress-track {
+  height: 10px;
+  background: #0f1115;
+  border: 1px solid #33394a;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: #3767ff;
+  border-radius: 999px;
+  transition: width 0.2s linear;
+}
+.progress-text { margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.file-info { margin: 6px 0 0; }
+button[disabled] { opacity: 0.6; cursor: default; }
 .muted { color: #9aa2b1; font-size: 0.9rem; }
 .field { margin-bottom: 14px; }
 label { display: block; margin-bottom: 4px; font-size: 0.9rem; color: #9aa2b1; }
