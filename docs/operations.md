@@ -55,6 +55,79 @@ S3의 고정 키(`.../mp4/camera-pip/0-video.mp4` 등 카메라 앵글별 고정
 [multi-laptop-worker-pool.md](../specs/001-online-virtual-evaluation/multi-laptop-worker-pool.md)의
 설계를 먼저 반영해야 한다.
 
+### 1-1. 평가 워커 멈추고 재개하기
+
+노트북에서 다른 무거운 작업(특히 **DRFC 학습**)을 해야 하거나 노트북을 끄기 전에 쓴다.
+
+**① 지금 평가 중인지 먼저 확인한다** — 이 확인을 건너뛰면 안 된다.
+
+```bash
+tail -5 /tmp/worker.log
+```
+
+`평가 시작` 이후 `평가 완료`가 안 보이면 평가가 진행 중이다. **끝날 때까지 기다린다**(1건에 10~30분).
+서버에서 큐를 봐도 된다 — [server-access.md](server-access.md)의 "평가 대기열 조회" ①번 쿼리에서
+`running`이 없으면 안전하다.
+
+**② 멈추기**
+
+```bash
+pgrep -f -- '-m [w]orker\.run' | xargs -r kill
+```
+
+`kill $(pgrep ...)` 형태는 **워커가 이미 죽어 있으면 `kill: usage:` 라는 엉뚱한 에러**를 뱉는다
+(빈 인자로 `kill`이 실행돼서다). 위 형태는 프로세스가 없으면 조용히 아무 일도 하지 않는다.
+
+멈췄는지 확인 — 아무것도 안 나오면 정지된 것이다.
+
+```bash
+pgrep -af -- '-m [w]orker\.run'
+```
+
+**③ 다시 시작하기**
+
+```bash
+cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
+```
+
+띄운 뒤 **반드시 확인한다.** PID가 나오고 로그에 `워커 시작`이 찍혀야 성공이다.
+
+```bash
+sleep 3; pgrep -af -- '-m [w]orker\.run'; tail -3 /tmp/worker.log
+```
+
+⚠️ **`setsid`를 빼먹지 말 것.** 그냥 `&`로 띄우면 터미널 창을 닫는 순간 SIGHUP을 받고 죽는다.
+로그에 아무 에러 없이 조용히 끊겨 있다면 십중팔구 이 경우다 (2026-07-30 실제 발생 — 평가를
+정상적으로 마친 직후 죽어 있었고, 그 뒤 2시간 반 동안 아무도 몰랐다).
+
+멈춰 있는 동안에도 **웹은 클라우드에서 계속 돌고 참가자 제출도 정상 접수된다.** 평가만 큐에 쌓이고
+참가자 화면에는 "평가 서버가 재개된 뒤 순서대로 처리됩니다" 안내가 뜬다(하트비트가 3분간 끊기면
+자동으로 표시된다). 워커를 다시 띄우면 밀린 것부터 제출 순서대로 처리한다.
+
+⚠️ **평가 도중에 죽이면 그 제출이 `running`에 갇힌다.** 워커는 시작할 때 오래된 `running`을
+대기열로 되돌리지만, 그 기준이 **시작한 지 35분(`EVAL_MAX_WAIT_SECONDS` 1800초 + 5분)이 지난 건**
+이라 방금 죽인 건은 회수되지 않는다. 그 팀은 "이전 제출의 결과가 아직 나오지 않았습니다"에 막혀
+새 모델을 못 올린다. 35분 뒤 워커를 재시작하면 자동으로 풀리고, 급하면 서버 DB에서 직접 되돌린다:
+
+```sql
+UPDATE submissions SET status='queued', worker_id=NULL, started_at=NULL WHERE id=<제출ID>;
+```
+
+### 1-2. ⚠️ 노트북에서 DRFC 학습을 돌릴 때
+
+**학습(`dr-start-training`)과 평가는 같은 MinIO 버킷의 같은 경로**
+(`s3://$DR_LOCAL_S3_BUCKET/$DR_LOCAL_S3_MODEL_PREFIX/model/`)를 쓴다. 워커는 평가 직전에
+**이 경로의 오브젝트를 전부 지우고** 참가자 모델을 넣는다(`worker/drfc.py`의 `inject_model`).
+
+| 겹치면 | 결과 |
+|---|---|
+| 학습 중에 평가가 시작됨 | 워커가 **학습 중인 체크포인트를 삭제**한다 |
+| 평가 중에 학습을 시작함 | 학습이 참가자 모델을 덮어써 **엉뚱한 평가 결과**가 나온다 |
+
+**그래서 노트북에서 학습하려면 §1-1로 워커를 먼저 멈춘다.** 학습이 끝나고 다시 띄우면 된다.
+자기 모델을 리더보드에 올리고 싶다면 다른 팀과 똑같이 **웹사이트에 업로드해야 한다** — 노트북에서
+학습했다고 큐에 자동으로 들어가지 않는다. 큐에 행을 넣는 경로는 웹 업로드(`POST /submit`) 하나뿐이다.
+
 ### 2. 클라우드 서버 확인
 
 웹은 노트북과 무관하게 이미 돌고 있다. 상태만 확인하면 된다.
@@ -117,12 +190,14 @@ SESSION_HTTPS_ONLY=true
 ## 종료
 
 ```bash
-kill $(pgrep -f '[w]orker.run')
+pgrep -f -- '-m [w]orker\.run' | xargs -r kill
 ```
 
 ```bash
-kill $(pgrep -f '[c]loudflared tunnel')
+pgrep -f '[c]loudflared tunnel' | xargs -r kill
 ```
+
+> 평가 중일 때 끄면 그 제출이 `running`에 갇힌다 — §1-1의 경고 참고. 먼저 확인하고 끈다.
 
 ```bash
 docker compose down

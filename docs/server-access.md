@@ -189,6 +189,46 @@ SELECT id, team_id, status, submitted_at FROM submissions ORDER BY id DESC LIMIT
 
 빠져나올 때는 `\q` 를 입력한다.
 
+### 평가 대기열(큐) 조회
+
+**큐의 정체는 `submissions` 테이블이다.** 별도의 큐 서버나 메시지 브로커는 없고, 상태가
+`queued`/`running`인 행이 곧 대기열이다. 관리자 화면에는 큐 목록 페이지가 없으므로 여기서 조회한다.
+
+**① 지금 밀려 있는 것만 보기** — 가장 자주 쓰는 조회다.
+
+```sql
+SELECT s.id, t.name AS team, s.status, to_char(s.submitted_at AT TIME ZONE 'Asia/Seoul','MM-DD HH24:MI') AS 제출, to_char(s.started_at AT TIME ZONE 'Asia/Seoul','HH24:MI') AS 시작, s.worker_id FROM submissions s JOIN teams t ON t.id = s.team_id WHERE s.status IN ('queued','running') ORDER BY s.submitted_at;
+```
+
+아무것도 안 나오면 큐가 비어 있다는 뜻이다. **배포하기 좋은 시점**이기도 하다(§5 참고).
+
+**② 최근 제출 이력 보기**
+
+```sql
+SELECT s.id, t.name AS team, s.status, to_char(s.submitted_at AT TIME ZONE 'Asia/Seoul','MM-DD HH24:MI') AS 제출, s.worker_id, left(coalesce(s.error_message,''), 40) AS 오류 FROM submissions s JOIN teams t ON t.id = s.team_id ORDER BY s.id DESC LIMIT 15;
+```
+
+**③ 평가 결과까지 같이 보기**
+
+```sql
+SELECT s.id, t.name AS team, r.finish_status, round(r.lap_time_seconds::numeric,3) AS 랩타임, round(r.best_progress_percent::numeric,1) AS 진행률, r.failure_reason FROM submissions s JOIN teams t ON t.id = s.team_id LEFT JOIN evaluation_results r ON r.submission_id = s.id WHERE s.status = 'done' ORDER BY s.id DESC LIMIT 15;
+```
+
+**상태값 읽는 법**
+
+| status | 의미 | 이때 볼 것 |
+|---|---|---|
+| `queued` | 대기 중. 워커가 아직 가져가지 않았다 | 오래 머물면 워커가 죽은 것 |
+| `running` | 평가 중 | `worker_id`(누가 잡았는지), `started_at`(언제부터) |
+| `done` | 평가가 끝까지 실행됨. **완주 실패도 포함** | `evaluation_results` 테이블 |
+| `error` | 파일 문제나 DRFC 실행 실패. 하루 한도에서 제외 | `error_message` |
+
+**`queued`가 쌓인 채 안 줄어들면** 서버가 아니라 **노트북 워커** 문제다. 서버는 제출을 접수만 하고
+평가는 노트북이 한다. [operations.md](operations.md)의 "평가 워커 멈추고 재개하기"를 참고한다.
+
+**시각은 UTC로 저장된다.** 위 쿼리의 `AT TIME ZONE 'Asia/Seoul'`이 한국 시간으로 바꿔주는
+부분이다. 이걸 빼고 조회하면 9시간 이른 시각이 나오니 놀라지 말 것.
+
 ---
 
 ## 4. 절대 하면 안 되는 명령
@@ -210,13 +250,28 @@ SELECT id, team_id, status, submitted_at FROM submissions ORDER BY id DESC LIMIT
 
 노트북에서 코드를 수정했다면, 서버로 보내고 다시 빌드해야 한다.
 
-**① 노트북에서 파일 전송**
+**① 먼저 대기열이 비었는지 확인** (대회 기간에만 해당)
+
+```bash
+ssh ubuntu@15.164.198.36 "cd ~/drleader && docker compose -f docker-compose.prod.yml exec -T db psql -U drleader -d drleader -c \"SELECT count(*) FROM submissions WHERE status IN ('queued','running');\""
+```
+
+`0`이면 바로 진행한다. 웹 컨테이너가 교체되는 몇 초 사이에 **업로드 중이던 제출 1건이 실패할 수 있어서**다.
+평가 자체는 노트북 워커가 하므로 웹을 갈아끼워도 진행 중인 평가는 영향받지 않는다.
+
+**② 노트북에서 파일 전송**
 
 ```bash
 cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && tar czf - --exclude=.venv --exclude=storage --exclude=.env --exclude=__pycache__ --exclude=.git . | ssh ubuntu@15.164.198.36 "tar xzf - -C ~/drleader"
 ```
 
-**② 서버에서 다시 빌드·기동**
+** 2-2 노트북에서 클라우드 서버에 접속 **
+```bash
+ssh ubuntu@15.164.198.36
+```
+
+
+**③ 서버에서 다시 빌드·기동**
 
 ```bash
 cd ~/drleader && docker compose -f docker-compose.prod.yml up -d --build
@@ -225,8 +280,21 @@ cd ~/drleader && docker compose -f docker-compose.prod.yml up -d --build
 빌드가 도는 동안 기존 컨테이너는 계속 서비스하고, 교체는 몇 초면 끝난다.
 DB 스키마가 바뀌는 변경이면 컨테이너가 뜰 때 마이그레이션이 자동으로 적용된다.
 
+**④ 반영됐는지 확인**
+
+```bash
+cd ~/drleader && docker compose -f docker-compose.prod.yml ps && docker compose -f docker-compose.prod.yml logs --tail 20 web
+```
+
+`web`이 `Up`이고 로그에 `Application startup complete`가 보이면 정상이다.
+마지막으로 브라우저에서 `https://spg-deepracer.doublejeong.com`을 **강력 새로고침**(`Ctrl`+`F5`)해서
+바뀐 화면이 나오는지 본다 — CSS·JS는 브라우저가 캐시하므로 그냥 새로고침하면 옛 파일이 보일 수 있다.
+
 ⚠️ **`.env`는 전송 대상에서 제외돼 있다.** 서버의 비밀값을 실수로 노트북 값으로 덮어쓰지 않기
 위해서다. 설정을 바꿔야 하면 서버에서 직접 편집한다: `nano ~/drleader/.env` → 저장 후 `up -d`.
+
+**워커도 다시 띄워야 하나?** `worker/` 아래 코드를 고쳤을 때만 그렇다. 웹 화면(`app/`)만 고쳤다면
+노트북 워커는 건드리지 않아도 된다 — 서버와 워커는 별개 프로세스이고 위 명령은 서버만 바꾼다.
 
 ---
 

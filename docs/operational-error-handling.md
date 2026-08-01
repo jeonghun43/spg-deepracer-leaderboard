@@ -83,14 +83,14 @@ echo "[run_worker] DR_LOCAL_S3_BUCKET=$DR_LOCAL_S3_BUCKET (환경변수 확인�
 cd ~/deepracer-for-cloud
 source bin/activate.sh run.env
 cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard
-pkill -f 'worker.run'
+pgrep -f -- '-m [w]orker\.run' | xargs -r kill   # pkill 금지 — 자기 셸까지 죽는다
 setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 ```
 
 또는 한 줄로:
 
 ```bash
-(cd ~/deepracer-for-cloud && source bin/activate.sh run.env) && (cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && pkill -f 'worker.run' 2>/dev/null || true; setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &)
+(cd ~/deepracer-for-cloud && source bin/activate.sh run.env) && (cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && pgrep -f -- '-m [w]orker\.run' | xargs -r kill; setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &)
 ```
 
 ---
@@ -181,7 +181,7 @@ docker stack ps deepracer-eval-{RUN_ID}
 docker stack rm deepracer-eval-* || true
 
 # 워커 재시작
-pkill -f 'worker.run'
+pgrep -f -- '-m [w]orker\.run' | xargs -r kill   # pkill 금지 — 자기 셸까지 죽는다
 (cd ~/deepracer-for-cloud && source bin/activate.sh run.env) && \
 cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && \
 setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
@@ -428,7 +428,7 @@ EOF
 
 **워커가 죽었을 때**
 ```bash
-pkill -f 'worker.run' 2>/dev/null || true
+pgrep -f -- '-m [w]orker\.run' | xargs -r kill   # pkill 금지 — 자기 셸까지 죽는다
 # 위의 "DRFC 환경변수 미로드" 섹션의 "운영자 조치" 참고
 ```
 
@@ -444,7 +444,7 @@ docker stack rm deepracer-eval-* || true
 docker ps -a | grep deepracer
 
 # 2. 워커 재시작
-pkill -f 'worker.run'
+pgrep -f -- '-m [w]orker\.run' | xargs -r kill   # pkill 금지 — 자기 셸까지 죽는다
 # 다시 시작하기 전에 위의 "DRFC 환경변수 미로드" 섹션 참고
 ```
 

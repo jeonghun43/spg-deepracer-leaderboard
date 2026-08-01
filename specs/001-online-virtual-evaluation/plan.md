@@ -108,6 +108,15 @@ STEP2 작성 시점에는 "dr-start-evaluation을 호출한다" 정도로만 적
 - **로그 보존**: DRFC는 `DR_ROBOMAKER_MOUNT_LOGS=False`이면 시뮬레이션 로그를 디스크에 남기지 않는다. 로그는 Swarm 서비스가 살아있는 동안만 `docker service logs`로 접근 가능하고 `dr-stop-evaluation`으로 스택을 지우면 영구히 사라져, 평가 실패 원인을 추적할 수 없게 된다. 따라서 워커는 **스택을 내리기 직전에** robomaker/rl_coach 로그를 `storage/eval_logs/{제출ID}.log`로 받아둔다.
 - **산출물 보관 위치**: 결과는 DB(`evaluation_results`), 영상은 `storage/videos/{시즌}/{팀}/{제출ID}.mp4`, 원본 metrics json 사본은 `storage/metrics/{시즌}/{팀}/{제출ID}.json`, 시뮬레이션 로그는 `storage/eval_logs/{제출ID}.log`. MinIO 쪽 원본은 다음 평가 때 덮어써질 수 있으므로 우리 `storage/`의 사본이 실제 보관본이다.
 
+### 5.1b 업로드 진행 상황 표시 (2026-07-30 추가)
+
+모델이 250MB 안팎이라 업로드에 수십 초~수 분이 걸린다. 그 시간을 줄일 수단은 없으므로(참가자 회선의 업링크가 병목) **진행 상황을 보여주는 쪽으로 해결한다.** 상세 분석은 [upload-progress-ux.md](upload-progress-ux.md).
+
+- `XMLHttpRequest`의 `upload.onprogress`로 진행률을 얻는다 — `fetch()`는 요청 본문의 전송 진행률을 제공하지 않아 선택지가 아니다.
+- **기존 폼 전송은 그대로 남긴다**(progressive enhancement). 스크립트가 `submit`을 가로채는 구조라, JS가 없거나 실패하면 지금과 동일하게 동작한다. 대회 중 참가자의 제출 경로를 새 코드에 전적으로 의존시키지 않기 위함이다.
+- 서버는 **응답 형식만** 분기한다(`Accept: application/json`이면 JSON, 아니면 기존 303 리다이렉트). 검증 순서·한도·동시 제출 제한·저장 경로 로직은 그대로 둔다.
+- 확장자·용량은 클라이언트에서 **먼저** 검사해 전송 자체를 막되, 서버 검증은 유지한다. 규칙 값은 템플릿이 `settings`에서 `data-*` 속성으로 내려보내 `config.py`가 유일한 출처로 남는다.
+
 ### 5.2 리더보드 정렬 규칙
 - 정렬 기준: 완주한 팀 중 **최고 랩타임 오름차순**.
 - 미완주 팀 표시 방식: 완주 팀 목록 아래에 "미완주"로 별도 구분해 노출 (순위 번호는 부여하지 않음).
