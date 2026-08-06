@@ -1,6 +1,7 @@
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 KST = ZoneInfo("Asia/Seoul")
@@ -37,6 +38,29 @@ class Settings(BaseSettings):
     video_upload_max_bytes: int = 200 * 1024 * 1024  # 200MB (실측 14MB 내외)
     # 이 시간 안에 하트비트가 없으면 평가 서버가 멈춘 것으로 보고 화면에 안내한다.
     worker_heartbeat_stale_minutes: int = 3
+
+    # ── 관리자 진입점 은닉 (admin-access-hardening.md) ──────────────────────
+    # 관리자 로그인 폼이 열리는 경로. 기본값을 두는 것은 로컬 개발 편의를 위해서이고,
+    # 운영 배포에서는 docker-compose.prod.yml이 이 값을 필수로 요구한다 — 설정하지 않으면
+    # 웹 컨테이너가 아예 뜨지 않아, 관리자 로그인이 조용히 공개된 채로 배포되는 일을 막는다.
+    admin_login_path: str = "/admin/login"
+    # 로그인 실패가 이만큼 쌓이면 잠근다. 비밀 경로가 유출됐을 때의 2차 방어선이다.
+    admin_login_max_attempts: int = 5
+    admin_login_lockout_minutes: int = 15
+
+    @field_validator("admin_login_path")
+    @classmethod
+    def _normalize_admin_login_path(cls, value: str) -> str:
+        """사람이 .env에 손으로 넣는 값이라 흔한 실수를 흡수한다.
+
+        특히 빈 문자열을 그대로 라우트로 등록하면 앱이 깨지므로 기본값으로 되돌린다.
+        """
+        value = value.strip().rstrip("/")
+        if not value:
+            return "/admin/login"
+        if not value.startswith("/"):
+            value = "/" + value
+        return value
 
     @property
     def models_dir(self) -> Path:

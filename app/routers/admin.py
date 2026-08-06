@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import admin_lockout
 from app.config import settings
 from app.db import get_db
 from app.deps import get_current_admin
@@ -23,6 +24,10 @@ from app.season_archive import archive_season
 from app.security import generate_password, hash_password, verify_password
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+# 로그인 폼은 /admin 아래가 아니라 .env로 지정한 비밀 경로에 붙는다 (파일 끝에서 등록).
+# /admin/*를 통째로 감출 때 예외를 파지 않아도 되고, 나중에 프록시에서 /admin/*를
+# 차단하는 선택지도 열어두기 위해서다.
+login_router = APIRouter(tags=["admin"])
 
 NEXT_STATUS: dict[SeasonStatus, SeasonStatus] = {
     SeasonStatus.PREPARING: SeasonStatus.ACTIVE,
@@ -41,29 +46,67 @@ STATUS_LABELS = {
 
 
 # ── 로그인 ──────────────────────────────────────────────────────────────
+#
+# 이 구역의 두 핸들러는 `router`(/admin prefix)가 아니라 파일 끝에서 `login_router`에
+# 비밀 경로로 등록된다. `/admin/login`은 더 이상 존재하지 않는다.
 
 
-@router.get("/login")
+def _login_context(request: Request, error: str | None) -> dict:
+    # 폼 action의 출처를 config.py 하나로 유지한다 (템플릿에 경로를 하드코딩하지 않는다).
+    return {"error": error, "admin_login_path": settings.admin_login_path}
+
+
+def _client_ip(request: Request) -> str:
+    """Caddy 뒤에 있으므로 X-Forwarded-For의 첫 값이 실제 접속자다.
+
+    이 헤더는 위조할 수 있다 — 그래서 IP 잠금만 믿지 않고 아이디 기준 잠금을 함께 쓴다
+    (`admin_lockout` 모듈 설명 참고).
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def admin_login_form(request: Request):
     if request.session.get("admin_id"):
         return RedirectResponse("/admin", status_code=303)
-    return templates.TemplateResponse(request, "admin/login.html", {"error": None})
+    return templates.TemplateResponse(request, "admin/login.html", _login_context(request, None))
 
 
-@router.post("/login")
 def admin_login_submit(
     request: Request,
     login_id: str = Form(...),
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    keys = admin_lockout.build_keys(_client_ip(request), login_id)
+
+    # 잠긴 동안에는 비밀번호를 아예 검사하지 않는다 — bcrypt를 돌리지 않아야
+    # 잠금이 계산 자원 소모 공격의 통로가 되지 않는다.
+    remaining = admin_lockout.seconds_remaining(keys)
+    if remaining:
+        minutes = max(1, (remaining + 59) // 60)
+        return templates.TemplateResponse(
+            request,
+            "admin/login.html",
+            _login_context(request, f"로그인 시도가 너무 많습니다. 약 {minutes}분 뒤에 다시 시도하세요."),
+            status_code=429,
+        )
+
     admin = db.execute(
         select(AdminAccount).where(AdminAccount.login_id == login_id)
     ).scalar_one_or_none()
     if admin is None or not verify_password(password, admin.password_hash):
+        admin_lockout.record_failure(keys)
         return templates.TemplateResponse(
-            request, "admin/login.html", {"error": "아이디 또는 비밀번호가 올바르지 않습니다."}, status_code=401
+            request,
+            "admin/login.html",
+            _login_context(request, "아이디 또는 비밀번호가 올바르지 않습니다."),
+            status_code=401,
         )
+
+    admin_lockout.reset(keys)
     request.session.clear()
     request.session["admin_id"] = admin.id
     return RedirectResponse("/admin", status_code=303)
@@ -71,8 +114,10 @@ def admin_login_submit(
 
 @router.get("/logout")
 def admin_logout(request: Request):
+    # 로그아웃 후 비밀 경로로 되돌리지 않는다. 관리자가 자리를 뜬 화면에 진입점이
+    # 남지 않도록, 아무나 봐도 되는 공개 화면으로 보낸다.
     request.session.clear()
-    return RedirectResponse("/admin/login", status_code=303)
+    return RedirectResponse("/leaderboard", status_code=303)
 
 
 # ── 대시보드 / 시즌 ──────────────────────────────────────────────────────
@@ -338,3 +383,16 @@ def set_daily_count(
     team.daily_count_adjustment_date = today
     db.commit()
     return RedirectResponse(f"/admin/seasons/{team.season_id}", status_code=303)
+
+
+# ── 비밀 경로 등록 ────────────────────────────────────────────────────────
+#
+# 데코레이터에는 상수만 쓸 수 있어 `add_api_route`로 붙인다.
+# `include_in_schema=False`가 중요하다 — 이걸 빼면 FastAPI가 /docs와 /openapi.json에
+# 경로를 그대로 실어 보내, 숨긴 주소가 공개 문서에서 새어 나간다.
+login_router.add_api_route(
+    settings.admin_login_path, admin_login_form, methods=["GET"], include_in_schema=False
+)
+login_router.add_api_route(
+    settings.admin_login_path, admin_login_submit, methods=["POST"], include_in_schema=False
+)

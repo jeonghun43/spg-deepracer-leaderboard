@@ -12,7 +12,9 @@
     <nav>
       <a href="/leaderboard">리더보드</a>
       <a href="/submit">모델 제출</a>
-      <a href="/admin">관리자</a>
+      {# 관리자로 로그인한 세션에서만 보인다. 참가자·관전자에게는 진입점 자체를 노출하지 않는다
+         (admin-access-hardening.md §3.5). 관리자는 로그인 후 비밀 경로를 다시 칠 필요가 없다. #}
+      {% if request.session.get('admin_id') %}<a href="/admin">관리자</a>{% endif %}
     </nav>
   </header>
   <main>

@@ -191,7 +191,8 @@ def team_id_by_name(season_id: int, name: str) -> int:
 print("\n=== T044 관리자 전체 여정 (시즌 생성 → 팀 등록 → 실격 → 아카이브) ===")
 
 admin = Client()
-status, _, _ = admin.post("/admin/login", {"login_id": "admin", "password": "admin1234"})
+# 로그인 폼은 .env의 ADMIN_LOGIN_PATH가 정하는 비밀 경로에 있다 (admin-access-hardening.md).
+status, _, _ = admin.post(settings.admin_login_path, {"login_id": "admin", "password": "admin1234"})
 check("관리자 로그인", status == 303, f"status={status}")
 
 suffix = dt.datetime.now(tz=KST).strftime("%H%M%S")

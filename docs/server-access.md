@@ -1,5 +1,9 @@
 # 클라우드 서버 접속과 점검 가이드
 
+> 📌 **주소·경로는 [handover.md](handover.md) §0 '내 환경 값' 표가 출처다.** 명령에 `<사용자>`가
+> 보이면 본인 Windows 사용자명으로 바꿔서 실행한다. 서버를 새로 만들어 IP가 바뀌었다면 §0을
+> 먼저 고치고 이 문서도 함께 갱신한다.
+
 > 웹 서버(AWS Lightsail)에 직접 들어가 상태를 확인하고 문제를 다루는 방법. 리눅스를 잘 몰라도
 > 따라 할 수 있게 썼다. 대회 운영 절차는 [handover.md](handover.md), 노트북 쪽 작업은
 > [operations.md](operations.md)를 본다.
@@ -20,7 +24,9 @@
 | 프로젝트 경로 | `~/drleader` |
 | 사양 | 2GB RAM / 2코어 / 58GB SSD (+스왑 2GB) |
 
-여기서 도는 것은 **웹·DB·리버스 프록시 세 개뿐**이다. 평가(DRFC)는 운영자 노트북에서 돈다.
+여기서 도는 것은 **웹·DB·리버스 프록시 세 개뿐**이다. 평가(DRFC)는 **별도의 AWS EC2 스팟
+인스턴스**에서 돈다 — 그쪽 접속·운영은 [worker-server-setup.md](worker-server-setup.md)를 본다.
+(2026-08-01 이전에는 운영자 노트북에서 돌았고, 지금 노트북은 예비 워커로만 쓴다.)
 
 ---
 
@@ -223,8 +229,10 @@ SELECT s.id, t.name AS team, r.finish_status, round(r.lap_time_seconds::numeric,
 | `done` | 평가가 끝까지 실행됨. **완주 실패도 포함** | `evaluation_results` 테이블 |
 | `error` | 파일 문제나 DRFC 실행 실패. 하루 한도에서 제외 | `error_message` |
 
-**`queued`가 쌓인 채 안 줄어들면** 서버가 아니라 **노트북 워커** 문제다. 서버는 제출을 접수만 하고
-평가는 노트북이 한다. [operations.md](operations.md)의 "평가 워커 멈추고 재개하기"를 참고한다.
+**`queued`가 쌓인 채 안 줄어들면** 이 서버가 아니라 **평가 서버(EC2)** 쪽 문제다. 이 서버는 제출을
+접수만 하고 평가는 EC2 워커가 한다. [worker-server-setup.md](worker-server-setup.md) §8.6의
+`journalctl -u drfc-worker`로 워커 로그를 먼저 본다. 스팟이 회수돼 인스턴스가 내려가 있을 수도
+있으니 AWS 콘솔에서 인스턴스 상태도 확인한다.
 
 **시각은 UTC로 저장된다.** 위 쿼리의 `AT TIME ZONE 'Asia/Seoul'`이 한국 시간으로 바꿔주는
 부분이다. 이걸 빼고 조회하면 9시간 이른 시각이 나오니 놀라지 말 것.
@@ -262,7 +270,7 @@ ssh ubuntu@15.164.198.36 "cd ~/drleader && docker compose -f docker-compose.prod
 **② 노트북에서 파일 전송**
 
 ```bash
-cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && tar czf - --exclude=.venv --exclude=storage --exclude=.env --exclude=__pycache__ --exclude=.git . | ssh ubuntu@15.164.198.36 "tar xzf - -C ~/drleader"
+cd /mnt/c/Users/<사용자>/spg_deepracer_leaderboard && tar czf - --exclude=.venv --exclude=storage --exclude=.env --exclude=__pycache__ --exclude=.git . | ssh ubuntu@15.164.198.36 "tar xzf - -C ~/drleader"
 ```
 
 ** 2-2 노트북에서 클라우드 서버에 접속 **
@@ -292,6 +300,30 @@ cd ~/drleader && docker compose -f docker-compose.prod.yml ps && docker compose 
 
 ⚠️ **`.env`는 전송 대상에서 제외돼 있다.** 서버의 비밀값을 실수로 노트북 값으로 덮어쓰지 않기
 위해서다. 설정을 바꿔야 하면 서버에서 직접 편집한다: `nano ~/drleader/.env` → 저장 후 `up -d`.
+
+**⚠️ 새 설정 키가 생긴 배포는 `.env`를 먼저 고쳐야 한다.** `.env`가 전송되지 않기 때문에,
+코드가 새 키를 요구하면 **서버에서 컨테이너가 뜨지 않는다.** 현재 필수 키는 다음과 같다.
+
+| 키 | 없으면 |
+|---|---|
+| `POSTGRES_PASSWORD` · `SESSION_SECRET` · `SITE_DOMAIN` | 기동 실패 |
+| `ADMIN_LOGIN_PATH` (2026-08-03 추가) | 기동 실패 — 아래 참고 |
+
+`ADMIN_LOGIN_PATH`는 **관리자 로그인 폼이 열리는 비밀 경로**다. 값이 없을 때 기본값으로
+조용히 넘어가면 관리자 로그인이 다시 공개된 채 배포되므로, 일부러 기동을 막아 즉시 드러나게 했다
+([admin-access-hardening.md](../specs/001-online-virtual-evaluation/admin-access-hardening.md)).
+서버에서 이렇게 만들어 넣는다.
+
+```bash
+python3 -c "import secrets,string;a=string.ascii_lowercase+string.digits;print('ADMIN_LOGIN_PATH=/_ops/'+''.join(secrets.choice(a) for _ in range(14)))" >> ~/drleader/.env
+```
+
+넣은 값은 `tail -1 ~/drleader/.env`로 확인해 **북마크해 둔다.** 이 주소를 잊으면 관리자 화면에
+들어갈 수 없다(그때는 서버의 `.env`를 다시 열어보면 된다).
+
+🔒 **Caddy 접근 로그(`/data/access.log`)에 이 경로가 평문으로 남는다.** 서버에 SSH로 들어올 수
+있는 사람은 어차피 DB도 볼 수 있어 새로 생기는 위험은 아니지만, **로그를 캡처해 공유할 때는
+경로를 가려야 한다.**
 
 **워커도 다시 띄워야 하나?** `worker/` 아래 코드를 고쳤을 때만 그렇다. 웹 화면(`app/`)만 고쳤다면
 노트북 워커는 건드리지 않아도 된다 — 서버와 워커는 별개 프로세스이고 위 명령은 서버만 바꾼다.
