@@ -423,6 +423,7 @@ OK 2026-07-27 11:32:28  db=8.0K storage=156K 보관=1벌
 | **관리자 계정** | 화면에서 추가·삭제할 수 없다. 인수인계 시 비밀번호를 공유해야 한다 | 관리자 관리 UI |
 | **관리자 비밀번호** | 시드로 만든 초기값을 그대로 쓰기 쉽다. 비밀 경로가 유출되면 이게 유일한 방어선이다 | 초기 비밀번호를 반드시 변경 (§5의 seed 명령) |
 | **백업이 노트북 의존** | 노트북이 오래 꺼져 있으면 백업도 멈춘다 | `STATUS` 확인을 일과에 넣거나 서버 쪽 이중 백업 |
+| **웹 서버 배포가 tar 밀어넣기** | 로컬에서 **지운 파일이 서버에 남고**, 서버에 어떤 코드가 올라가 있는지 확인할 방법이 없다 | 대회 종료 후 git 방식으로 전환 — 절차는 [git-deploy-migration.md](git-deploy-migration.md) |
 | **평가 기준이 저장소 밖 설정** | `DR_EVAL_CHECKPOINT=best`가 DRFC의 `run.env`에 있다 | 서버 재세팅 시 반드시 다시 설정 (§1 경고 참고) |
 
 ---
@@ -436,6 +437,7 @@ OK 2026-07-27 11:32:28  db=8.0K storage=156K 보관=1벌
 | **클라우드 서버 접속·점검 (docker ps, 로그 보기)** | [server-access.md](server-access.md) |
 | **참가자에게 보낼 제출 방법 공지문** | [operations.md](operations.md) "참가자 제출 형식 안내" |
 | 명령어, 기동·종료 절차, 백업 대상 | [operations.md](operations.md) |
+| **웹 서버 배포를 git 방식으로 바꾸기** (대회 종료 후) | [git-deploy-migration.md](git-deploy-migration.md) |
 | 장애가 났을 때의 실제 대응 사례 | [operational-error-handling.md](operational-error-handling.md) |
 | 이 서비스가 무엇을 왜 하는가 | [specs/001-online-virtual-evaluation/spec.md](../specs/001-online-virtual-evaluation/spec.md) |
 | 기술 설계와 그 이유 | [specs/001-online-virtual-evaluation/plan.md](../specs/001-online-virtual-evaluation/plan.md) |
