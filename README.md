@@ -34,7 +34,7 @@
 - 1번(온라인 예선)과 2번(오프라인 본선)은 연결된 하나의 대회 흐름이며, **물리 차량 10대 제약**이 본선 참가 방식(전담 차량 vs 공유 차량)에 영향을 준다.
 - 온라인 예선: 팀당 하루 제출 5회 제한, 리더보드는 최고기록만 표시, 트랙 1개 고정, 3바퀴 평가, 제출 취소 불가, 실격 시 사유 비공개.
 - 오프라인 본선: 2바퀴 고정, 연습주행(미반영)·실제주행(반영) 구분, 실제주행은 10분 내 무제한 재도전, 트랙 이탈 시 5초 페널티, 차량·주행순서는 추첨.
-- 기술 스택(STEP2 확정): **Python 기반**(백엔드 FastAPI + 서버 렌더링) + **PostgreSQL** + 로컬 디스크 저장. 현재 실행 환경은 Windows 노트북(GPU 없음) + WSL2 Ubuntu에서 DRFC 실행(평가 1건당 약 10분). 향후 확장 옵션: GPU 서버 1대로 이전([gpu-server-migration.md](specs/001-online-virtual-evaluation/gpu-server-migration.md)) 또는 GPU 없는 노트북 여러 대를 워커 풀로 묶어 병렬 처리([multi-laptop-worker-pool.md](specs/001-online-virtual-evaluation/multi-laptop-worker-pool.md)) — 아직 실제 채택 여부는 미정, 참고 문서로만 존재. 비전 타이머 하드웨어는 신규 구축 예정.
+- 기술 스택(STEP2 확정): **Python 기반**(백엔드 FastAPI + 서버 렌더링) + **PostgreSQL** + 로컬 디스크 저장. 현재 실행 환경은 **두 대로 나뉜다** — 웹·DB는 AWS Lightsail(서울), 평가 워커·DRFC는 **AWS EC2 스팟 인스턴스**(m7i.xlarge, 4vCPU/16GB, GPU 없음)에서 돈다. 평가 1건당 실측 약 8분(노트북 시절 약 14분). 구축·운영 절차는 [worker-server-setup.md](docs/worker-server-setup.md). 운영자 노트북은 **예비 워커**로 두고 필요할 때만 켠다. 비전 타이머 하드웨어는 신규 구축 예정.
 - 온라인 제출 규칙(STEP3 정리): 한 팀은 "대기/평가중" 제출을 동시에 1건만 가질 수 있음(이전 결과가 나와야 재업로드 가능). 하루 5회 한도는 완주 성공 여부가 아니라 "평가가 끝까지 정상 실행됐는지"로 카운트. 리더보드에는 순위·팀명·누적 제출 횟수·최고기록·영상 링크를 표시.
 
 ## 실행하기 (온라인 서비스)
@@ -54,7 +54,10 @@ cp -n .env.example .env
 
 웹과 DB는 **클라우드 서버**(AWS Lightsail 서울)에서 24시간 돌고 있다.
 
-- 서비스: **https://spg-deepracer.doublejeong.com** · 관리자: `/admin`
+- 서비스: **https://spg-deepracer.doublejeong.com**
+- 관리자 화면: `/admin`으로 바로 가면 **404다.** 로그인 폼은 `.env`의 `ADMIN_LOGIN_PATH`가
+  정하는 비밀 경로에만 열린다 — 들어가는 법은 [docs/handover.md](docs/handover.md) §1
+  "관리자 화면에 어떻게 들어가나"
 - 서버 접속·점검: [docs/server-access.md](docs/server-access.md)
 
 **노트북에서는 평가 워커만 띄운다.** DRFC 시뮬레이터가 노트북에 있기 때문이다.
@@ -73,7 +76,9 @@ setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 docker compose up -d
 ```
 
-웹: http://localhost:8000 · 관리자: http://localhost:8000/admin
+웹: http://localhost:8000
+관리자: `.env`의 `ADMIN_LOGIN_PATH`가 정하는 경로 (기본값 `/admin/login`).
+`.env.example`을 그대로 복사했다면 http://localhost:8000/admin/login 이다.
 
 > 이 방식은 개발용이거나 클라우드 서버를 못 쓰게 됐을 때의 비상 수단이다. 운영 데이터는
 > 클라우드 서버에 있으므로, 로컬로 되살리려면 백업 복원이 함께 필요하다.

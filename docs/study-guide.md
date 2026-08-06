@@ -53,9 +53,11 @@
   DeepRacer-for-Cloud(DRFC)라는 외부 도구를 셸로 호출해 시뮬레이션을 돌린다.
   결과(metrics JSON, 영상)는 MinIO(S3 호환 저장소)에서 boto3로 가져온다.
 - 배포: **두 대로 나뉘어 있다.** 웹·DB·리버스 프록시(Caddy)는 클라우드 서버(AWS Lightsail)에서
-  Docker Compose로 돌고 도메인+HTTPS로 공개된다. 평가 워커와 DRFC는 운영자 노트북(WSL2 Ubuntu)에
-  남아 있다(시뮬레이터가 2GB 서버로는 못 돌아감). 둘은 Tailscale 사설망으로 DB를 주고받고,
-  모델·영상은 토큰 인증 HTTPS 엔드포인트(`/internal/...`)로 전송한다.
+  Docker Compose로 돌고 도메인+HTTPS로 공개된다. 평가 워커와 DRFC는 **AWS EC2 스팟 인스턴스**
+  (m7i.xlarge, Ubuntu 22.04)에서 systemd 서비스로 돈다(시뮬레이터가 2GB 웹 서버로는 못 돌아감).
+  둘은 Tailscale 사설망으로 DB를 주고받고, 모델·영상은 토큰 인증 HTTPS
+  엔드포인트(`/internal/...`)로 전송한다. 운영자 노트북에도 같은 워커 구성이 남아 있어 예비
+  워커로 켤 수 있다 — 워커가 여러 대여도 되도록 큐 확보가 `FOR UPDATE SKIP LOCKED`로 되어 있다.
 
 [디렉터리 구조]
 app/            웹 애플리케이션

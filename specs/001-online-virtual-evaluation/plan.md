@@ -6,6 +6,7 @@
 
 - 백엔드 언어는 **Python**으로 확정 (DRFC, 평가 파이프라인, 향후 002의 비전 처리까지 모두 Python 생태계로 통일).
 - 서버는 정식 사양이 아직 없어, 우선 **GPU 없는 Windows 노트북 + WSL2 Ubuntu** 환경에서 DRFC `dr-start-evaluation`을 실행하는 방식으로 개발·운영한다 (실제 동작 확인됨). 실측 결과 **평가 1건당 약 10분**이 걸린다 — 이 수치를 대기열 설계와 참가자 안내 문구의 기준값으로 삼는다. 추후 GPU 서버로 이전하는 절차는 [gpu-server-migration.md](gpu-server-migration.md)에 별도로 정리한다.
+  - → **갱신 (2026-08-01)**: 평가 서버를 **AWS EC2 스팟 인스턴스**(m7i.xlarge, CPU 전용)로 이전했다. 재측정 결과 **EC2 약 8분 / 노트북 약 14분**(8건 평균). 참가자 안내에 쓰는 `eval_minutes_estimate`는 여유를 두어 **10분을 유지**한다. 아래 §1의 부하 계산(하루 50건 = 500분)은 노트북 기준이므로 EC2에서는 더 여유가 있다. 절차는 [worker-server-setup.md](../../docs/worker-server-setup.md).
 - 평가 영상·모델 파일은 **로컬 서버 디스크**에 그대로 저장한다. 외부 스토리지 연동은 하지 않는다.
 - 예상 규모: 시즌당 약 **10팀**, 팀당 하루 제출 수는 **3~5회** 수준으로 예상 (하루 한도 5회와 거의 맞물림). 최악의 경우(10팀 × 5회 = 하루 50건)에도 평가 1건당 10분이면 총 약 500분(8시간 20분)으로, 순차 처리로도 하루 안에 소화 가능한 규모다 — 별도의 대규모 큐 인프라 없이 DB 테이블 기반 큐로 충분하다는 판단의 근거.
 
@@ -146,6 +147,12 @@ STEP2 작성 시점에는 "dr-start-evaluation을 호출한다" 정도로만 적
 - 업로드 파일은 확장자·용량 상한을 검증한다 (DRFC가 기대하는 모델 아카이브 형식에 맞는지).
 - 평가는 격리된 Docker 컨테이너(DRFC 표준 방식)에서 실행되므로 임의 모델 파일이 호스트를 직접 침해할 위험은 DRFC의 격리 수준에 의존한다 — 이 부분은 DRFC 자체의 보안 모델을 신뢰하는 것을 전제로 한다.
 - 관리자 페이지는 팀 계정과 분리된 별도 권한(관리자 계정)으로 접근한다.
+- **관리자 진입점 은닉** (2026-08-03, [admin-access-hardening.md](admin-access-hardening.md) 참고):
+  - 로그인 폼은 `.env`의 `ADMIN_LOGIN_PATH`(예: `/_ops/k7f3q9x2p1`)에서만 열린다. `/admin/login`은 없앤다. 운영 배포에서는 `docker-compose.prod.yml`이 이 값을 필수로 요구해, 설정하지 않으면 웹 컨테이너가 뜨지 않는다.
+  - 미인증 상태의 `/admin/*` 요청은 303 리다이렉트가 아니라 **404**로 응답한다. 리다이렉트는 "여기 관리자 페이지가 있다"는 사실을 알려주기 때문이다. **부작용으로 세션 만료 후 `/admin`에 가면 404를 보게 되며, 이는 의도된 동작이다.**
+  - 상단 메뉴의 "관리자" 링크는 세션에 `admin_id`가 있을 때만 렌더한다.
+  - 로그인 실패를 **IP 기준과 로그인 아이디 기준 양쪽으로** 세어, 어느 한쪽이 5회에 닿으면 15분간 잠근다. IP만 세면 `X-Forwarded-For` 위조로 우회되므로 계정 기준이 실질적인 방어선이다. 카운터는 프로세스 메모리에 두며(웹은 단일 컨테이너·단일 워커), 관리자가 자기 계정을 잠갔을 때는 `docker compose restart web`으로 즉시 푼다.
+  - **비밀 경로는 인증이 아니라 은닉이다.** Caddy 접근 로그에 평문으로 남으며, 실질적 방어선은 여전히 비밀번호다.
 - **공인 인터넷 노출에 따른 추가 조치** (2026-07-25, [deployment-public-access.md](deployment-public-access.md) 참고):
   - `SESSION_SECRET`은 기본값(`change-me-in-production`)을 절대 그대로 쓰지 않고, 운영 전 `.env`에 무작위 값을 설정한다.
   - 세션 쿠키의 HTTPS 강제 여부는 `SESSION_HTTPS_ONLY` 환경변수(기본 `false`)로 제어한다. **현재 운영 서버는 `true`** (도메인 + Let's Encrypt HTTPS). `http://localhost:8000`으로 직접 접속하는 로컬 테스트에서는 `false`로 둬야 브라우저가 Secure 쿠키를 저장해 로그인이 동작한다.
@@ -157,9 +164,11 @@ STEP2 작성 시점에는 "dr-start-evaluation을 호출한다" 정도로만 적
 - 로그·모델 파일·영상은 모두 호스트에 볼륨 마운트해 컨테이너 재시작에도 유실되지 않도록 한다.
 - ~~**외부 접속**: 도메인을 별도로 구입하지 않는 한, `cloudflared`의 Quick Tunnel로 `web` 컨테이너의 8000번 포트만 공인 인터넷에 노출한다.~~
   → **대체됨 (2026-07-30)**: 노트북이 절전·종료될 때마다 터널 주소가 영구히 사라지는 문제가 두 번 발생해, 웹·DB를 클라우드 서버로 옮기고 구입 도메인 + Caddy(Let's Encrypt)로 공개하도록 바꿨다. 배포 구성은 `docker-compose.prod.yml`, 절차와 배경은 [cloud-migration.md](cloud-migration.md), 서버 운용은 [server-access.md](../../docs/server-access.md) 참고.
-- **현재 배포**: 클라우드 서버에서 `Caddy + 웹 + PostgreSQL`을 Docker Compose로 기동하고, 평가 워커와 DRFC는 운영자 노트북에서 실행한다. 두 대는 Tailscale 사설망(DB)과 토큰 인증 HTTPS 엔드포인트(모델·영상 전송)로 연결된다.
+- ~~**현재 배포**: 클라우드 서버에서 `Caddy + 웹 + PostgreSQL`을 Docker Compose로 기동하고, 평가 워커와 DRFC는 운영자 노트북에서 실행한다.~~
+  → **갱신됨 (2026-08-01)**: 평가 워커와 DRFC를 **AWS EC2 스팟 인스턴스**(m7i.xlarge, Ubuntu 22.04)로 옮겼다. 노트북 성능·가용성 한계 때문이며, 평가에 GPU가 필요 없다는 것이 확인되어 CPU 인스턴스를 골랐다(월 약 8.5만원). 워커는 systemd 서비스로 등록되어 스팟 회수 후에도 자동 복구된다. 노트북은 예비 워커로 남긴다. 구축·운영 절차는 [worker-server-setup.md](../../docs/worker-server-setup.md).
+- **현재 배포**: 클라우드 서버(Lightsail)에서 `Caddy + 웹 + PostgreSQL`을 Docker Compose로 기동하고, 평가 워커와 DRFC는 EC2에서 실행한다. 두 대는 Tailscale 사설망(DB)과 토큰 인증 HTTPS 엔드포인트(모델·영상 전송)로 연결된다.
 
 ## 8. 열린 질문 / 리스크 (STEP3 전 확인 필요)
 
-- [ ] GPU 서버로 옮길 경우 평가 소요 시간이 달라진다 — 이관 절차와 재측정 방법은 [gpu-server-migration.md](gpu-server-migration.md)에 정리했으니, 실제 이관 시 그 문서의 체크리스트를 따른다.
+- [x] ~~GPU 서버로 옮길 경우 평가 소요 시간이 달라진다~~ → **해소됨 (2026-08-01)**: GPU가 아니라 CPU 인스턴스(EC2 m7i.xlarge)로 이전했고, 평가 소요 시간을 재측정했다 — **노트북 약 14분(8건 평균) → EC2 약 8분**. 평가는 Gazebo 물리 연산과 컨테이너 기동이 대부분이라 GPU 이득이 제한적이며, DRFC도 이미 CPU 전용 이미지(`DR_SIMAPP_VERSION=6.0.4-cpu`)로 돌고 있었다. 참가자 안내용 `eval_minutes_estimate`는 여유를 두어 10분으로 유지한다. 절차는 [worker-server-setup.md](../../docs/worker-server-setup.md).
 - [ ] 예선 통과 기준(N팀)을 정하는 구체적인 규칙은 여전히 미정 (spec.md §9와 동일 항목, 002 논의와 함께 확정 예정 — 단, 002는 온라인 서비스 구현 이후로 순연).

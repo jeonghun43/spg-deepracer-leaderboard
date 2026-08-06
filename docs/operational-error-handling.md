@@ -1,6 +1,28 @@
 # 대회 운영 중 에러 처리 가이드
 
+> 📌 **주소·경로는 [handover.md](handover.md) §0 '내 환경 값' 표가 출처다.** 명령에 `<사용자>`가
+> 보이면 본인 Windows 사용자명으로 바꿔서 실행한다. 서버를 새로 만들어 IP가 바뀌었다면 §0을
+> 먼저 고치고 이 문서도 함께 갱신한다.
+
 대회 운영 중 발생하는 에러들을 감지하고, 자동 복구 또는 운영자 개입을 위한 가이드.
+
+> ⚠️ **이 문서의 명령들은 노트북(WSL2) 기준으로 쓰였다.** 2026-08-01부터 평가 워커의 주 실행
+> 위치는 **AWS EC2**이고, 거기서는 워커가 systemd 서비스(`drfc-worker`)로 돈다. 진단 내용과
+> 원인 분석은 양쪽 모두에 그대로 적용되지만, **워커를 다루는 명령만 아래 표대로 바꿔 쓴다.**
+> EC2 서버 자체에 대한 것은 [worker-server-setup.md](worker-server-setup.md)를 본다.
+>
+> | 하는 일 | 노트북 (이 문서 기본) | EC2 |
+> |---|---|---|
+> | 워커가 살아있나 | `pgrep -af -- '-m [w]orker\.run'` | `sudo systemctl status drfc-worker` |
+> | 워커 로그 | `tail -f /tmp/worker.log` | `journalctl -u drfc-worker -f` |
+> | 워커 재시작 | `setsid nohup bash worker/run_worker.sh ...` | `sudo systemctl restart drfc-worker` |
+> | 워커 정지 | `pgrep ... \| xargs -r kill` | `sudo systemctl stop drfc-worker` |
+> | 프로젝트 경로 | `/mnt/c/Users/<사용자>/spg_deepracer_leaderboard` | `~/spg-deepracer-leaderboard` |
+> | DRFC 경로 | `~/deepracer-for-cloud` | `~/deepracer-for-cloud` (동일) |
+>
+> **EC2에서는 워커를 수동으로 띄우지 않는다.** systemd가 이미 띄우고 있어서 수동으로 하나 더
+> 띄우면 워커가 2개가 되고, `WORKER_ID`가 호스트명이라 서로의 작업을 뺏는다
+> (worker-server-setup.md §8.6).
 
 ## 0. 필요할만한 것들
 
@@ -82,7 +104,7 @@ echo "[run_worker] DR_LOCAL_S3_BUCKET=$DR_LOCAL_S3_BUCKET (환경변수 확인�
 ```bash
 cd ~/deepracer-for-cloud
 source bin/activate.sh run.env
-cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard
+cd /mnt/c/Users/<사용자>/spg_deepracer_leaderboard
 pgrep -f -- '-m [w]orker\.run' | xargs -r kill   # pkill 금지 — 자기 셸까지 죽는다
 setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 ```
@@ -90,7 +112,7 @@ setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 또는 한 줄로:
 
 ```bash
-(cd ~/deepracer-for-cloud && source bin/activate.sh run.env) && (cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && pgrep -f -- '-m [w]orker\.run' | xargs -r kill; setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &)
+(cd ~/deepracer-for-cloud && source bin/activate.sh run.env) && (cd /mnt/c/Users/<사용자>/spg_deepracer_leaderboard && pgrep -f -- '-m [w]orker\.run' | xargs -r kill; setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &)
 ```
 
 ---
@@ -183,7 +205,7 @@ docker stack rm deepracer-eval-* || true
 # 워커 재시작
 pgrep -f -- '-m [w]orker\.run' | xargs -r kill   # pkill 금지 — 자기 셸까지 죽는다
 (cd ~/deepracer-for-cloud && source bin/activate.sh run.env) && \
-cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && \
+cd /mnt/c/Users/<사용자>/spg_deepracer_leaderboard && \
 setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 ```
 

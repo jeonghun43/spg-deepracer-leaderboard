@@ -1,13 +1,24 @@
-# 운영 가이드 (평가 워커 · 노트북 쪽)
+# 운영 가이드 (노트북 쪽 — 예비 워커·백업)
 
-**현재 구성 (2026-07-30 이후)**: 웹과 DB는 **클라우드 서버**(AWS Lightsail 서울)에서 24시간 돌고,
-이 노트북에는 **평가 워커와 DRFC만** 남아 있다. 워커가 호스트의 DRFC Docker Swarm을 제어해야 해서
+> 📌 **주소·경로는 [handover.md](handover.md) §0 '내 환경 값' 표가 출처다.** 명령에 `<사용자>`가
+> 보이면 본인 Windows 사용자명으로 바꿔서 실행한다. 서버를 새로 만들어 IP가 바뀌었다면 §0을
+> 먼저 고치고 이 문서도 함께 갱신한다.
+
+> ⚠️ **평가 워커의 주 실행 위치는 2026-08-01부터 AWS EC2다.**
+> EC2 워커의 구축·운영·로그 확인은 [worker-server-setup.md](worker-server-setup.md)를 본다.
+> 이 문서의 워커 기동/정지 절차는 **노트북을 예비 워커로 켤 때** 그대로 유효하다
+> (worker-server-setup.md §8.8).
+
+**현재 구성 (2026-08-01 이후)**: 웹과 DB는 **클라우드 서버**(AWS Lightsail 서울)에서 24시간 돌고,
+평가 워커와 DRFC는 **EC2 스팟 인스턴스**에서 돈다. 이 노트북에도 워커와 DRFC가 그대로 설치되어
+있어 **예비 워커**로 쓸 수 있다. 워커가 호스트의 DRFC Docker Swarm을 제어해야 해서
 컨테이너에 넣지 않는다.
 
 | 무엇을 | 어디서 | 문서 |
 |---|---|---|
-| 웹·DB·HTTPS | 클라우드 서버 | [server-access.md](server-access.md) |
-| 평가 워커·DRFC | 이 노트북 (WSL2) | **이 문서** |
+| 웹·DB·HTTPS | 클라우드 서버 (Lightsail) | [server-access.md](server-access.md) |
+| **평가 워커·DRFC (주)** | **EC2 스팟 인스턴스** | [worker-server-setup.md](worker-server-setup.md) |
+| 평가 워커·DRFC (예비) | 이 노트북 (WSL2) | **이 문서** |
 | 백업 실행 | 이 노트북 → 서버에서 끌어옴 | 이 문서 "자동 백업" |
 
 > 이전 완료 기록: 2026-07-30에 웹·DB를 클라우드로 옮겼고, **노트북의 웹·DB 컨테이너는 정지했다**
@@ -17,7 +28,7 @@
 ## 사전 준비 (최초 1회)
 
 ```bash
-cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard
+cd /mnt/c/Users/<사용자>/spg_deepracer_leaderboard
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -87,7 +98,7 @@ pgrep -af -- '-m [w]orker\.run'
 **③ 다시 시작하기**
 
 ```bash
-cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard && setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
+cd /mnt/c/Users/<사용자>/spg_deepracer_leaderboard && setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 ```
 
 띄운 뒤 **반드시 확인한다.** PID가 나오고 로그에 `워커 시작`이 찍혀야 성공이다.
@@ -104,10 +115,16 @@ sleep 3; pgrep -af -- '-m [w]orker\.run'; tail -3 /tmp/worker.log
 참가자 화면에는 "평가 서버가 재개된 뒤 순서대로 처리됩니다" 안내가 뜬다(하트비트가 3분간 끊기면
 자동으로 표시된다). 워커를 다시 띄우면 밀린 것부터 제출 순서대로 처리한다.
 
-⚠️ **평가 도중에 죽이면 그 제출이 `running`에 갇힌다.** 워커는 시작할 때 오래된 `running`을
-대기열로 되돌리지만, 그 기준이 **시작한 지 35분(`EVAL_MAX_WAIT_SECONDS` 1800초 + 5분)이 지난 건**
-이라 방금 죽인 건은 회수되지 않는다. 그 팀은 "이전 제출의 결과가 아직 나오지 않았습니다"에 막혀
-새 모델을 못 올린다. 35분 뒤 워커를 재시작하면 자동으로 풀리고, 급하면 서버 DB에서 직접 되돌린다:
+⚠️ **평가 도중에 죽이면 그 제출은 워커를 다시 켤 때까지 `running`에 갇힌다.** 그 팀은 "이전 제출의
+결과가 아직 나오지 않았습니다"에 막혀 새 모델을 못 올린다.
+
+**같은 기기에서 워커를 다시 켜면 즉시 풀린다** — `recover_stale_running`이 자기 `worker_id`로
+잡혀 있는 `running`은 **시간과 무관하게** 되돌린다(2026-08-01 수정). 다른 기기의 워커가 대신
+회수하려면 **시작한 지 35분**(`EVAL_MAX_WAIT_SECONDS` 1800초 + 5분)이 지나야 한다 — 그 워커가
+아직 정상 처리 중일 수 있기 때문이다.
+
+즉 **죽인 워커를 그대로 다시 켜는 것이 가장 빠른 복구**다. 그 기기를 당분간 못 켜는 상황이면
+서버 DB에서 직접 되돌린다:
 
 ```sql
 UPDATE submissions SET status='queued', worker_id=NULL, started_at=NULL WHERE id=<제출ID>;
@@ -185,7 +202,8 @@ SESSION_HTTPS_ONLY=true
 할 때는 터널 주소로 접속하거나, 잠시 `false`로 되돌린다.
 
 배경과 GitHub Pages 검토 결과는
-[deployment-public-access.md](../specs/001-online-virtual-evaluation/deployment-public-access.md) 참고.
+[not_used_now_deployment-public-access.md](../specs/001-online-virtual-evaluation/not_used_now_deployment-public-access.md) 참고
+(파일명 그대로 **현재는 쓰지 않는 방식**이다 — 클라우드 이관으로 대체됐다).
 
 ## 종료
 
@@ -238,7 +256,7 @@ ORDER BY s.submitted_at DESC LIMIT 10;
 **Python으로 조회 (권장):**
 
 ```bash
-cd /mnt/c/Users/jjh03/spg_deepracer_leaderboard
+cd /mnt/c/Users/<사용자>/spg_deepracer_leaderboard
 source .venv/bin/activate
 python << 'EOF'
 from app.db import SessionLocal
@@ -300,15 +318,19 @@ EOF
 
 ## 백업 대상
 
-| 대상 | 내용 |
-|---|---|
-| PostgreSQL | 시즌·팀·계정·제출·평가결과 메타데이터. `docker compose exec db pg_dump -U drleader drleader > backup.sql` |
-| `storage/models/` | 참가자가 제출한 모델 원본 |
-| `storage/videos/` | 평가 영상 (리더보드에서 재생) |
-| `storage/metrics/` | 원본 metrics json (결과 검증·재파싱용) |
-| `storage/eval_logs/` | 시뮬레이션 로그 (실패 원인 추적용, 용량 크면 주기적으로 정리 가능) |
+| 대상 | 어디에 있나 | 내용 |
+|---|---|---|
+| PostgreSQL | 웹 서버 | 시즌·팀·계정·제출·평가결과 메타데이터. `docker compose exec db pg_dump -U drleader drleader > backup.sql` |
+| `storage/models/` | 웹 서버 | 참가자가 제출한 모델 원본 |
+| `storage/videos/` | 웹 서버 | 평가 영상 (리더보드에서 재생). 워커가 평가 직후 업로드한다 |
+| `storage/metrics/` | 웹 서버 | 원본 metrics json (결과 검증·재파싱용). 워커가 평가 직후 업로드한다 |
+| `storage/eval_logs/` | **워커 서버** | 시뮬레이션 로그 (실패 원인 추적용). **업로드 경로가 없어 자동 백업에 안 들어간다** — [worker-server-setup.md](worker-server-setup.md) §8.10으로 직접 받는다 |
 
 DB와 `storage/`는 **반드시 함께** 백업/복원해야 한다. 한쪽만 복원하면 리더보드 기록과 실제 영상 파일이 어긋난다.
+
+⚠️ **자동 백업의 원본은 웹 서버(Lightsail)다. 워커 서버가 아니다.** 노트북에서 전부 돌리던 시절에는
+웹·DB·워커가 한 디스크에 있어 구분이 없었지만, 지금은 갈라졌다. 워커가 만든 영상·metrics는 평가가
+끝나는 즉시 웹 서버로 올라가므로 백업에 포함되고, **`eval_logs`만 워커에 남는다.**
 
 ### 자동 백업 (scripts/backup.sh)
 
@@ -322,7 +344,7 @@ bash scripts/backup.sh
 기본 동작
 - **원본: 클라우드 서버**(`ubuntu@15.164.198.36`의 `~/drleader`). 이 스크립트는 노트북에서 돌면서
   SSH로 서버의 DB와 `storage/`를 끌어온다.
-- 저장 위치: `/mnt/c/Users/jjh03/drleader-backup` (Windows: `C:\Users\jjh03\drleader-backup`)
+- 저장 위치: `/mnt/c/Users/<사용자>/drleader-backup` (Windows: `C:\Users\<사용자>\drleader-backup`)
 - 담는 것: DB 덤프(gzip) + `storage/`(단 `work/`와 `models/` 제외)
 - 보관: 최근 14벌, 오래된 것부터 자동 삭제
 - 결과 요약은 `STATUS` 파일에, 실행 이력은 `backup.log`에 남는다
@@ -346,7 +368,7 @@ bash scripts/backup.sh
 백업이 조용히 실패하고, 그 사실은 `STATUS` 파일을 열어봐야만 드러난다.
 
 **백업본을 노트북 밖으로 보내기**: Google Drive 데스크톱 → 설정 → **내 컴퓨터** → 폴더 추가 →
-`C:\Users\jjh03\drleader-backup`를 **"Google Drive에 백업"**으로 지정한다. Drive의 가상
+`C:\Users\<사용자>\drleader-backup`를 **"Google Drive에 백업"**으로 지정한다. Drive의 가상
 드라이브(G:)에는 WSL에서 직접 쓸 수 없어서, 로컬 폴더를 Drive가 올려가게 하는 방향으로 구성한다.
 ⚠️ "내 드라이브 미러링"을 켜면 Drive 전체가 로컬로 내려와 C 드라이브가 꽉 찬다. 고르지 말 것.
 
@@ -412,7 +434,7 @@ gunzip -c ~/drleader-backup/db_YYYY-MM-DD.sql.gz | docker compose exec -T db psq
 3. `storage/`도 같은 날짜 것으로 함께 복원한다.
 
 ```bash
-tar -xzf ~/drleader-backup/storage_YYYY-MM-DD.tar.gz -C /mnt/c/Users/jjh03/spg_deepracer_leaderboard
+tar -xzf ~/drleader-backup/storage_YYYY-MM-DD.tar.gz -C /mnt/c/Users/<사용자>/spg_deepracer_leaderboard
 ```
 
 4. 검증용 DB를 정리한다.
@@ -475,15 +497,129 @@ docker compose exec -T db psql -U drleader -d postgres -c "DROP DATABASE drleade
 자동으로 감지해 위 해결 방법을 오류 메시지로 안내한다. 그래도 참가자 안내문에 미리
 적어두는 편이 문의를 줄인다.
 
+## 시즌·트랙 변경 절차 (반드시 이 순서로)
+
+> **2026-08-01 실제 사고**: 새 시즌을 만들며 리더보드의 트랙 이름만 `reInvent2019`로 바꾸고
+> `run.env`를 그대로 두어, 제출한 모델이 **이전 트랙(Vegas_track)에서 평가되고 그 기록이
+> reInvent2019 시즌 리더보드에 올라갔다.** 화면 어디에도 경고가 뜨지 않는다.
+
+**왜 이런 일이 생기나**: 앱의 `Season.track_name`은 **화면에 보여주는 문자열일 뿐**이고
+([models.py](../app/models.py)), 실제 평가 트랙은 오직 각 평가 서버의 `run.env`에 있는
+`DR_WORLD_NAME`이 정한다. 둘은 서로를 전혀 검사하지 않는다.
+
+1. **모든 평가 서버의 `run.env`를 먼저 고친다** — EC2와 노트북(예비 워커) **양쪽 다**.
+   ```bash
+   sed -i 's/^DR_WORLD_NAME=.*/DR_WORLD_NAME=<트랙이름>/' ~/deepracer-for-cloud/run.env
+   ```
+   ```bash
+   grep DR_WORLD_NAME ~/deepracer-for-cloud/run.env
+   ```
+   워커 재시작은 필요 없다 — `run_evaluation.sh`가 평가할 때마다 `run.env`를 다시 읽는다.
+2. **앱 시즌의 트랙 이름을 `DR_WORLD_NAME`과 글자 그대로 똑같이** 입력한다. 사람이 보기 좋은
+   별칭을 쓰면 불일치를 눈으로 잡을 수 없다.
+3. **테스트 제출을 한 건 올려 검증한다.** 두 가지로 확인한다.
+   - **평가 영상이 그 트랙 모양인지 눈으로 본다** ← 가장 확실하다. 위 사고도 영상을 봤으면 바로 알았다
+   - 시뮬레이션 로그: `grep -i "<트랙이름>" ~/spg-deepracer-leaderboard/storage/eval_logs/*.log`
+4. **검증용 제출과 그 이전 기록을 모두 지운다** (아래 "제출·기록 삭제하기").
+5. 대회를 연다.
+
+**트랙 이름 고르기**: `_cw`(시계) / `_ccw`(반시계) 접미사가 붙은 것은 **같은 모양이지만 방향이
+반대인 별개 트랙**이다. 코너 순서가 뒤집혀 모델 입장에서는 사실상 다른 트랙이므로, 참가자에게
+공지할 때 접미사까지 포함한 문자열을 그대로 알려준다. 사용 가능한 목록은 평가 서버에서
+`ls ~/deepracer-for-cloud/tracks/`로 본다.
+
+> 이름을 틀려도 조용히 틀리지는 않는다. 시뮬레이터에 없는 월드면 robomaker가 기동 단계에서 죽고
+> `run_evaluation.sh`가 exit 3으로 끝나 그 제출이 `error`로 남는다. 잘못된 기록이 리더보드에
+> 올라가지는 않는다.
+
+## 제출·기록 삭제하기
+
+관리자 화면에는 제출을 지우는 기능이 없다. DB에서 직접 지우되, **그냥 SQL로 지우면 250MB짜리
+모델 파일과 영상이 디스크에 그대로 남는다.** 아래처럼 파일까지 함께 정리한다.
+
+**먼저 백업한다.** 되돌릴 수 없다.
+
+```bash
+cd ~/drleader && docker compose -f docker-compose.prod.yml exec -T db pg_dump -U drleader drleader > ~/backup-$(date +%Y%m%d-%H%M).sql
+```
+
+**대상 확인** (읽기만 한다):
+
+```bash
+cd ~/drleader && docker compose -f docker-compose.prod.yml exec -T web python - <<'PY'
+from app.db import SessionLocal
+from app.models import Team
+db = SessionLocal()
+for t in db.query(Team).order_by(Team.id):
+    print(f"[team {t.id}] {t.name}  제출 {len(t.submissions)}건")
+    for s in t.submissions:
+        print(f"    #{s.id}  {s.status.value}  {s.submitted_at:%m-%d %H:%M}")
+db.close()
+PY
+```
+
+⚠️ 대상 팀에 `queued`/`running` 제출이 있으면 **끝날 때까지 기다린다.** 처리 중인 제출을 지우면
+워커가 결과를 되돌려 쓸 때 실패한다.
+
+**삭제** — `APPLY=False`인 동안에는 아무것도 지우지 않는다(파일 삭제는 롤백이 안 되므로
+`APPLY`일 때만 실행된다):
+
+```bash
+cd ~/drleader && docker compose -f docker-compose.prod.yml exec -T web python - <<'PY'
+TEAM_ID     = 0       # ← 위에서 확인한 번호
+APPLY       = False   # ← 확인 끝나면 True
+DELETE_TEAM = False   # True면 팀 계정까지, False면 기록만 지우고 팀은 남긴다
+
+from app.db import SessionLocal
+from app.models import Team
+from app.retention import remove_submission_files
+
+db = SessionLocal()
+team = db.get(Team, TEAM_ID)
+if team is None:
+    raise SystemExit(f"team {TEAM_ID} 없음")
+print(f"대상: [{team.id}] {team.name} — 제출 {len(team.submissions)}건")
+for s in team.submissions:
+    v = s.result.video_path if s.result else None
+    print(f"  #{s.id} {s.status.value}  model={s.model_path}  video={v}")
+if APPLY:
+    n = 0
+    for s in list(team.submissions):
+        n += remove_submission_files(s)
+        db.delete(s)
+    if DELETE_TEAM:
+        db.delete(team)
+    db.commit()
+    print(f"삭제 완료 — 파일 {n}개, 팀 삭제={DELETE_TEAM}")
+else:
+    db.rollback()
+    print("DRY-RUN — 아무것도 지우지 않았다. 목록이 맞으면 APPLY=True로 다시 실행")
+db.close()
+PY
+```
+
+`evaluation_results`는 FK가 `ondelete="CASCADE"`라 함께 지워지고, `DELETE_TEAM=True`면 계정도
+`cascade="all, delete-orphan"`으로 정리된다. 다만 `storage/metrics/`의 metrics json 사본과
+평가 서버의 `storage/eval_logs/`는 남는다 — 수 KB라 무해하고 참조하는 화면도 없다.
+
 ## 알려진 제약 / 주의사항
 
-- **평가 1건당 약 10분** (GPU 없는 노트북 기준). 대기열이 밀리면 그만큼 순차적으로 늘어난다.
+- **평가 1건당 실측**: EC2(m7i.xlarge) **약 8분**, 노트북 **약 14분**(8건 평균, 최대 20분).
+  대기열이 밀리면 그만큼 순차적으로 늘어난다. 참가자에게 보여주는 예상 대기 시간은
+  [config.py](../app/config.py)의 `eval_minutes_estimate`(현재 **10분**)로 계산하는데,
+  EC2 실측보다 넉넉하게 잡아 둔 값이다 — 낙관적으로 잡으면 "안내보다 오래 걸린다"는 문의가 는다.
+  표본이 더 쌓이면 조정한다.
+- **완주하지 못하는 모델은 평가가 훨씬 오래 걸린다.** 리셋을 소진할 때까지 계속 돌기 때문이다.
+  실제로 노트북 시절 31분 51초가 걸려 워커 타임아웃(`MAX_WAIT_SECONDS`=30분)으로 끝난 건이 있다.
+  그동안 뒤에 줄 선 제출은 전부 대기한다. 2026-08-01에 `DR_EVAL_MAX_RESETS`를 100 → **15**로,
+  `DR_EVAL_OFF_TRACK_PENALTY`를 5.0 → **3.0**으로 낮춘 것이 이 문제에 대한 대응이다.
 - 평가는 DRFC의 `run.env` 설정을 그대로 쓴다. 트랙(`DR_WORLD_NAME`)이나 바퀴 수
   (`DR_EVAL_NUMBER_OF_TRIALS`)를 바꾸려면 DRFC의 `run.env`를 직접 수정한다. 앱의 시즌 설정에
   적어둔 트랙 이름은 화면 표시용이며, 실제 평가 트랙을 바꾸지는 않는다 — 시즌을 새로 열 때
   둘이 일치하는지 운영자가 확인해야 한다.
-- 워커가 평가 중 죽으면 해당 제출은 "평가중"에 멈춘다. 워커를 다시 시작하면 일정 시간이 지난
-  건을 자동으로 대기열에 되돌린다.
+- 워커가 평가 중 죽으면 해당 제출은 "평가중"에 멈춘다. 워커를 다시 시작하면
+  **그 워커가 잡고 있던 건은 시간과 무관하게 즉시** 대기열로 되돌아가고, 다른 워커가 잡은 건은
+  35분이 지난 뒤에 되돌아간다(`recover_stale_running`, 2026-08-01 수정).
 - **평가 영상(MP4)이 261바이트로 비어 있다.** DRFC의 영상 편집 노드가 `/agent/mp4_video_metrics`
   ROS 서비스 호출에 실패해 프레임이 하나도 쌓이지 않는 환경 문제로, 이 플랫폼과 무관하게
   이전부터 있던 증상이다(관련 [DRFC 이슈 #67](https://github.com/aws-deepracer-community/deepracer-for-cloud/issues/67)).
@@ -491,4 +627,6 @@ docker compose exec -T db psql -U drleader -d postgres -c "DROP DATABASE drleade
   그 이후 평가부터 코드 변경 없이 영상이 자동으로 붙는다.
 - 관리자 화면의 "오늘 완료 카운트"는 지정한 값이 그 시점 기준으로 맞춰지는 **보정값**이다.
   지정한 뒤에 완료되는 평가는 그대로 누적되므로 하루 한도는 계속 정상 동작한다.
-- GPU 서버로 옮기는 절차는 [gpu-server-migration.md](../specs/001-online-virtual-evaluation/gpu-server-migration.md) 참고.
+- 평가 서버(EC2) 구축·복원·비용 관리 절차는 [worker-server-setup.md](worker-server-setup.md) 참고.
+  (옛 [gpu-server-migration.md](../specs/001-online-virtual-evaluation/gpu-server-migration.md)는
+  GPU 서버를 전제로 쓴 문서라 현재 구성과 맞지 않는다 — 평가에는 GPU가 필요 없다는 것이 확인됐다.)
