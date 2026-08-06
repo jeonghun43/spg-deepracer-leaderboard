@@ -258,6 +258,10 @@ SELECT s.id, t.name AS team, r.finish_status, round(r.lap_time_seconds::numeric,
 
 노트북에서 코드를 수정했다면, 서버로 보내고 다시 빌드해야 한다.
 
+> ⚠️ **이 서버는 git 저장소가 아니다.** `git pull`은 동작하지 않는다. 평가 서버(EC2)는
+> git으로 관리하지만 웹 서버는 아래의 tar 방식이다. 두 서버의 방식이 다르다는 점을 기억할 것.
+> 대회 종료 후 git 방식으로 전환하는 절차는 [git-deploy-migration.md](git-deploy-migration.md)에 있다.
+
 **① 먼저 대기열이 비었는지 확인** (대회 기간에만 해당)
 
 ```bash
