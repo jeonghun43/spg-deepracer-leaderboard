@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # true인 상태에서 http://localhost:8000으로 직접 접속하면(터널 없이) 브라우저가
     # Secure 쿠키를 저장하지 않아 로그인이 깨지므로, 로컬 전용 운영/테스트 중에는 false로 둔다.
     session_https_only: bool = False
+    # 세션 쿠키 유효 시간. **지정하지 않으면 Starlette 기본값이 14일**이라, 공용 PC에서
+    # 로그인한 관리자 세션이 2주 동안 살아 있게 된다. 참가자는 재로그인이 쉽고 관리자
+    # 세션은 짧아야 하므로 8시간으로 줄인다 (둘이 같은 미들웨어를 공유한다).
+    session_max_age_seconds: int = 8 * 60 * 60
     storage_dir: Path = BASE_DIR / "storage"
 
     # spec.md에서 확정한 규칙
@@ -47,6 +51,13 @@ class Settings(BaseSettings):
     # 로그인 실패가 이만큼 쌓이면 잠근다. 비밀 경로가 유출됐을 때의 2차 방어선이다.
     admin_login_max_attempts: int = 5
     admin_login_lockout_minutes: int = 15
+
+    # ── 참가자 로그인 잠금 ──────────────────────────────────────────────────
+    # 관리자보다 느슨하게 잡는다. 비밀번호를 추측당할 위험이 아니라 **bcrypt 연산으로
+    # 서버를 마비시키는 것**을 막는 장치라, 문턱을 낮게 둘 이유가 없다. 반대로 너무
+    # 빡빡하면 발급받은 비밀번호를 잘못 붙여넣은 참가자가 대회 중에 제출을 못 하게 된다.
+    team_login_max_attempts: int = 10
+    team_login_lockout_minutes: int = 5
 
     @field_validator("admin_login_path")
     @classmethod

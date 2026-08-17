@@ -119,6 +119,65 @@ def test_아이디_대소문자와_공백은_같은_카운터로_본다():
     assert admin_lockout.build_keys("1.2.3.4", " Admin ") == admin_lockout.build_keys("1.2.3.4", "admin")
 
 
+# ── 참가자 로그인 잠금 (2026-08-10) ──────────────────────────────────────
+#
+# 참가자 로그인에도 같은 장치를 붙였다. 막으려는 것은 비밀번호 추측이 아니라
+# bcrypt 연산으로 서버를 마비시키는 것이다.
+
+
+def test_참가자와_관리자_카운터는_분리된다():
+    """**이 테스트가 참가자 잠금의 핵심이다.**
+
+    같은 공유 네트워크(동아리방 와이파이)에서 참가자가 오타를 반복하면 IP 키가 겹친다.
+    scope로 나누지 않으면 그 순간 관리자까지 잠겨, 대회 중에 운영자가 못 들어간다.
+    """
+    같은_IP = "203.0.113.50"
+    참가자_키 = admin_lockout.build_keys(같은_IP, "1-7", scope="team")
+    for _ in range(settings.team_login_max_attempts):
+        admin_lockout.record_failure(
+            참가자_키,
+            max_attempts=settings.team_login_max_attempts,
+            lockout_minutes=settings.team_login_lockout_minutes,
+            now=0.0,
+        )
+
+    assert admin_lockout.seconds_remaining(참가자_키, now=0.0) > 0
+    관리자_키 = admin_lockout.build_keys(같은_IP, "admin", scope="admin")
+    assert admin_lockout.seconds_remaining(관리자_키, now=0.0) == 0
+
+
+def test_참가자_잠금은_자기_정책을_따른다():
+    """관리자(5회/15분)보다 느슨한 값(10회/5분)이 그대로 적용돼야 한다."""
+    키 = admin_lockout.build_keys("203.0.113.51", "1-8", scope="team")
+    정책 = {
+        "max_attempts": settings.team_login_max_attempts,
+        "lockout_minutes": settings.team_login_lockout_minutes,
+    }
+    # 관리자 상한(5회)을 넘겨도 참가자 상한 직전까지는 잠기지 않는다.
+    for _ in range(settings.team_login_max_attempts - 1):
+        assert admin_lockout.record_failure(키, **정책, now=0.0) == 0
+
+    assert admin_lockout.record_failure(키, **정책, now=0.0) > 0
+    # 그리고 관리자 잠금 시간(15분)이 아니라 참가자 시간(5분)만큼만 잠긴다.
+    참가자_잠금초 = settings.team_login_lockout_minutes * 60
+    assert admin_lockout.seconds_remaining(키, now=참가자_잠금초 - 1) > 0
+    assert admin_lockout.seconds_remaining(키, now=참가자_잠금초 + 1) == 0
+
+
+# ── 세션 수명 (2026-08-10) ──────────────────────────────────────────────
+
+
+def test_세션_유효기간이_지정되어_있다():
+    """지정하지 않으면 Starlette 기본값 14일이 적용돼, 공용 PC의 관리자 세션이 2주 산다."""
+    from starlette.middleware.sessions import SessionMiddleware
+
+    세션_미들웨어 = [m for m in app.user_middleware if m.cls is SessionMiddleware]
+    assert 세션_미들웨어, "SessionMiddleware가 등록되어 있지 않다"
+    설정된_수명 = 세션_미들웨어[0].kwargs["max_age"]
+    assert 설정된_수명 == settings.session_max_age_seconds
+    assert 설정된_수명 < 14 * 24 * 60 * 60, "Starlette 기본값(14일)보다 짧아야 한다"
+
+
 # ── 라우팅 (T125·T126) ──────────────────────────────────────────────────
 #
 # DB가 필요 없는 경계만 확인한다. 로그인 성공 이후의 여정은

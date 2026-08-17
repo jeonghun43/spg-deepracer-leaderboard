@@ -12,7 +12,7 @@ venv/
 # --- 로컬 전용 설정 ---
 # 내 PC의 경로·권한 허용 목록이라 공유하지 않는다. (.claude/settings.json은 공유 대상)
 .claude/settings.local.json
-
+CLAUDE.md
 # --- 참가자 데이터 ---
 # 제출 모델(.tar.gz)·평가 영상·시뮬레이션 로그·metrics. 타인의 저작물이고 용량도 크다.
 # 앱과 워커가 실행 시 mkdir(parents=True)로 만들므로 빈 폴더를 커밋할 필요가 없다.

@@ -746,18 +746,21 @@ def build_keys(ip: str, login_id: str) -> list[str]:
 진짜 IP는 `X-Forwarded-For` 헤더에 있다:
 
 ```python
-# app/routers/admin.py:59-68
-def _client_ip(request: Request) -> str:
+# app/admin_lockout.py
+def client_ip(request: Request) -> str:
     """Caddy 뒤에 있으므로 X-Forwarded-For의 첫 값이 실제 접속자다.
 
-    이 헤더는 위조할 수 있다 — 그래서 IP 잠금만 믿지 않고 아이디 기준 잠금을 함께 쓴다
-    (`admin_lockout` 모듈 설명 참고).
+    이 헤더는 위조할 수 있다 — 그래서 IP 잠금만 믿지 않고 아이디 기준 잠금을 함께 쓴다.
     """
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 ```
+
+> 2026-08-10에 `admin.py`의 `_client_ip`에서 `admin_lockout.client_ip`로 옮겼다.
+> 참가자 로그인(§9-2)도 같은 함수가 필요해졌기 때문이다 — 라우터에 있던 헬퍼를
+> 두 라우터가 쓰게 되면 공용 모듈이 있어야 할 자리다.
 
 **문제**: `X-Forwarded-For`는 **클라이언트가 직접 넣을 수 있는 헤더다.**
 
@@ -908,7 +911,7 @@ def _prune(now: float) -> None:
 ```python
 # app/routers/admin.py:77-112
 def admin_login_submit(request, login_id=Form(...), password=Form(...), db=Depends(get_db)):
-    keys = admin_lockout.build_keys(_client_ip(request), login_id)
+    keys = admin_lockout.build_keys(admin_lockout.client_ip(request), login_id, scope="admin")
 
     # 잠긴 동안에는 비밀번호를 아예 검사하지 않는다 — bcrypt를 돌리지 않아야
     # 잠금이 계산 자원 소모 공격의 통로가 되지 않는다.
@@ -1146,32 +1149,54 @@ if form_token != request.session.get("csrf"):
 > `reissue-password`, `teams/new`)는 붙일 가치가 있다.
 > **은닉과 잠금까지 갖춘 시스템에서 CSRF만 비어 있는 것은 균형이 안 맞는다.**
 
-### 9-2. 팀 로그인에는 잠금이 없다 ⚠️
+### 9-2. ~~팀 로그인에는 잠금이 없다~~ → 해결 (2026-08-10)
 
-`admin_lockout`은 **관리자 로그인에만** 적용된다.
-`auth.py`의 팀 로그인은 무제한 시도가 가능하다.
+**있었던 문제**: `admin_lockout`이 관리자 로그인에만 적용돼, `auth.py`의 팀 로그인은
+무제한 시도가 가능했다.
 
-**심각도 판단:**
+**심각도 판단이 이랬다:**
 - 팀 비밀번호는 10자리 랜덤 → 온라인 무차별 대입은 비현실적
 - **하지만 bcrypt CPU 소모 DoS는 여전히 가능하다** (§7-7에서 본 그 문제)
 - 팀 계정이 뚫려도 피해는 "그 팀 이름으로 제출" 정도
 
-**같은 모듈을 재사용하면 몇 줄로 끝난다:**
-```python
-keys = admin_lockout.build_keys(_client_ip(request), login_id)
-```
-(`_client_ip`는 `admin.py`에 있으니 공용 모듈로 옮겨야 한다)
+즉 **막으려는 것은 추측이 아니라 비용이다.** 운영 웹은 2코어·메모리 900MB 상한인데
+bcrypt가 요청당 수백 ms를 물어, 인증 없이 초당 수십 건만 던지면 웹이 응답을 멈춘다.
 
-### 9-3. 세션 만료 설정이 명시되지 않았다
+**같은 모듈을 재사용해 해결했다:**
+```python
+# app/routers/auth.py
+keys = admin_lockout.build_keys(admin_lockout.client_ip(request), login_id, scope="team")
+```
+
+두 가지를 함께 도입했다.
+
+**① `scope`로 카운터를 분리했다.** 이게 없으면 같은 공유 네트워크(동아리방 와이파이)에서
+참가자가 오타를 반복할 때 **IP 키가 겹쳐 관리자까지 잠긴다.** 대회 중에 운영자가 못
+들어가는 것이 가장 곤란한 상황이라, 나누는 것이 필수였다.
+(`test_참가자와_관리자_카운터는_분리된다`가 이걸 지킨다.)
+
+**② 정책을 따로 뒀다.** 관리자 5회/15분, 참가자 **10회/5분**. 참가자는 발급받은
+비밀번호를 붙여넣다 실수하기 쉽고, 잠기면 대회 중에 제출을 못 한다. 반면 막으려는 것이
+추측이 아니라 CPU 소모이므로 문턱을 낮게 둘 이유가 없다.
+
+### 9-3. ~~세션 만료 설정이 명시되지 않았다~~ → 해결 (2026-08-10)
 
 Starlette `SessionMiddleware`의 `max_age` 기본값은 **14일**이다.
-대회가 2주라면 우연히 맞지만, **의도한 값이 아니라 기본값이다.**
+대회가 2주라면 우연히 맞지만, **의도한 값이 아니라 기본값이었다.**
+
+**관리자 세션이 14일 유지되는 것이 특히 아쉬웠다.** 은닉으로 진입점을 막아놨는데
+쿠키가 2주를 살아있으면, 그 쿠키 하나가 2주짜리 열쇠다. 공용 PC에서 로그인하면
+비밀 경로를 몰라도 `/admin`에 그대로 들어가진다.
+
 ```python
-app.add_middleware(SessionMiddleware, secret_key=..., https_only=..., max_age=60*60*12)
+# app/main.py
+app.add_middleware(SessionMiddleware, ..., max_age=settings.session_max_age_seconds)
+# app/config.py — session_max_age_seconds: int = 8 * 60 * 60
 ```
 
-**관리자 세션이 14일 유지되는 것은 특히 아쉽다.** 은닉으로 진입점을 막아놨는데
-쿠키가 2주를 살아있으면, 그 쿠키 하나가 2주짜리 열쇠다.
+**8시간**으로 잡았다. 참가자와 관리자가 같은 미들웨어를 공유하므로 한 값을 써야 하는데,
+8시간이면 참가자에게 부담이 없으면서 관리자 세션이 밤을 넘기지 않는다.
+`test_세션_유효기간이_지정되어_있다`가 **다시 기본값으로 돌아가는 것**을 막는다.
 
 ### 9-4. 비밀번호 변경 기능이 없다
 
