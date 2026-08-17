@@ -17,6 +17,9 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=settings.session_secret,
     https_only=settings.session_https_only,
+    # 지정하지 않으면 Starlette 기본값이 14일이다. 공용 PC에서 로그인한 관리자 세션이
+    # 2주를 사는 것을 막는다 — 비밀 경로를 몰라도 /admin에 그대로 들어가진다.
+    max_age=settings.session_max_age_seconds,
 )
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

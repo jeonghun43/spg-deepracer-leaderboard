@@ -56,18 +56,6 @@ def _login_context(request: Request, error: str | None) -> dict:
     return {"error": error, "admin_login_path": settings.admin_login_path}
 
 
-def _client_ip(request: Request) -> str:
-    """Caddy 뒤에 있으므로 X-Forwarded-For의 첫 값이 실제 접속자다.
-
-    이 헤더는 위조할 수 있다 — 그래서 IP 잠금만 믿지 않고 아이디 기준 잠금을 함께 쓴다
-    (`admin_lockout` 모듈 설명 참고).
-    """
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
 def admin_login_form(request: Request):
     if request.session.get("admin_id"):
         return RedirectResponse("/admin", status_code=303)
@@ -80,7 +68,11 @@ def admin_login_submit(
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    keys = admin_lockout.build_keys(_client_ip(request), login_id)
+    # scope="admin" — 참가자 로그인과 카운터를 분리한다. 같은 네트워크의 참가자가
+    # 오타를 반복해도 관리자가 함께 잠기지 않아야 한다 (admin_lockout.build_keys 참고).
+    keys = admin_lockout.build_keys(
+        admin_lockout.client_ip(request), login_id, scope="admin"
+    )
 
     # 잠긴 동안에는 비밀번호를 아예 검사하지 않는다 — bcrypt를 돌리지 않아야
     # 잠금이 계산 자원 소모 공격의 통로가 되지 않는다.

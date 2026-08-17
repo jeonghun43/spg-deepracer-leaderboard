@@ -67,7 +67,7 @@
 {% if latest_submission %}
 <div class="card">
   <h2 style="margin-top:0;">최근 제출 결과</h2>
-  <p>제출 시각: {{ latest_submission.submitted_at.strftime('%Y-%m-%d %H:%M') }}</p>
+  <p>제출 시각: {{ latest_submission.submitted_at | kst }}</p>
   <p>상태: <span class="badge status-{{ latest_submission.status.value }}">{{ latest_submission.status.value }}</span></p>
   {% if latest_submission.status.value == 'error' %}
     <p class="error">오류: {{ latest_submission.error_message or '알 수 없는 오류' }}</p>

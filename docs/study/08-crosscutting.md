@@ -19,6 +19,7 @@
 | `Team.daily_count_adjustment_date` | 보정 유효일 | **KST 날짜** | 파이썬 (`today_kst()`) |
 | 업로드 파일명 접두사 | `20260726T120000` | UTC | 파이썬(웹) |
 | 하루 한도 경계 | KST 자정 | **KST** | 파이썬 (`quota.py`) |
+| 화면에 찍는 제출 시각 | `2026-08-18 08:59` | **KST** | 파이썬 (`render.py`의 `kst` 필터) |
 | S3 `LastModified` | 오브젝트 갱신 | UTC | **MinIO** |
 | `admin_lockout.locked_until` | 잠금 해제 시각 | **monotonic** | 파이썬(웹) |
 | `upload.js`의 속도 계산 | 경과 시간 | 브라우저 `Date.now()` | 클라이언트 |
@@ -30,7 +31,15 @@
 KST = ZoneInfo("Asia/Seoul")                                # config.py
 def now_utc(): return dt.datetime.now(tz=dt.timezone.utc)   # worker/run.py
 def today_kst(): return dt.datetime.now(tz=KST).date()      # quota.py
+def kst(value, fmt="%Y-%m-%d %H:%M"):                       # render.py (표시)
+    return value.astimezone(KST).strftime(fmt)
 ```
+
+> **"표시는 KST"를 한동안 지키지 못했다.** 템플릿이 `submitted_at.strftime(...)`을
+> 직접 호출해, `TIMESTAMPTZ`가 psycopg2를 거쳐 **DB 세션 시간대(UTC)** 로 돌아온 값을
+> 그대로 찍었다. 값은 맞는데 화면만 9시간 일렀다 (2026-08-18). 저장이 aware라고 해서
+> 표시가 저절로 맞지는 않는다 — **변환은 표시하는 쪽이 직접 해야 한다.**
+> 자세한 내용과 `TZ` 환경변수를 쓰지 않은 이유는 [1단계 §5](01-skeleton.md)에 있다.
 
 **2. 모든 datetime은 aware.**
 `DateTime(timezone=True)` → PostgreSQL `TIMESTAMPTZ`.
@@ -659,8 +668,8 @@ PYTHONPATH=. .venv/bin/python -m pytest tests -q
 | # | 내용 | 위치 | 심각도 |
 |---|---|---|---|
 | S1 | **CSRF 토큰 없음** (SameSite=Lax가 대부분 막지만) | 모든 POST | **중** |
-| S2 | 팀 로그인에 잠금 없음 (bcrypt CPU 소모 DoS 가능) | `auth.py` | 중 |
-| S3 | 세션 `max_age` 미명시 (기본 14일) — 관리자 세션이 2주 산다 | `main.py` | 중 |
+| S2 | ~~팀 로그인에 잠금 없음 (bcrypt CPU 소모 DoS 가능)~~ → **해결** (2026-08-10, `scope="team"`으로 분리된 잠금) | `auth.py` | ~~중~~ |
+| S3 | ~~세션 `max_age` 미명시 (기본 14일)~~ → **해결** (2026-08-10, 8시간) | `main.py` | ~~중~~ |
 | S4 | ~~`/docs`, `/openapi.json`이 열려 있다~~ → **해결** (2026-08-06, `/redoc`까지 셋 다 차단) | `main.py` | ~~낮음~~ |
 | S5 | `/logout`이 GET | `auth.py`, `admin.py` | 낮음 |
 | S6 | 사용자 열거 타이밍 차이 | `auth.py`, `admin.py` | 낮음 |
@@ -674,7 +683,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests -q
 
 | # | 내용 | 위치 | 심각도 |
 |---|---|---|---|
-| C1 | `IntegrityError` 미처리 → 500 + 250MB 고아 파일 | `submissions.py:160` | **중** |
+| C1 | ~~`IntegrityError` 미처리 → 500 + 250MB 고아 파일~~ → **해결** (2026-08-10, rollback + 파일 삭제) | `submissions.py` | ~~**중**~~ |
 | C2 | 동점 순위가 1, 2로 표시됨 (1, 1, 3이 관례) | `leaderboard.html:14` | 중 |
 | C3 | `recover_stale_running`이 시작 시에만 실행 | `run.py:295` | 중 (하트비트가 완화) |
 | C4 | 워커에 재시작 정책 없음 | 운영 | **중** |
@@ -735,8 +744,11 @@ PYTHONPATH=. .venv/bin/python -m pytest tests -q
 | 서버 디스크가 조용히 참 | ✅ `request_prune` |
 | 모든 실패가 "시간 초과"로 표시 | ✅ `failure_reason` |
 | 자동 생성 API 문서가 공개 | ✅ `docs_url`·`redoc_url`·`openapi_url` = `None` (S4) |
+| 팀 로그인 bcrypt CPU 소모로 서버 마비 | ✅ `scope="team"` 잠금 (S2) |
+| 관리자 세션이 14일 산다 | ✅ `session_max_age_seconds` = 8시간 (S3) |
+| 동시 제출 시 250MB 고아 파일이 영구히 남음 | ✅ `IntegrityError` → rollback + `unlink` (C1) |
 
-**14개가 해결됐다.** 이게 이 프로젝트가 실제로 운영되며 배운 것들이다.
+**17개가 해결됐다.** 이게 이 프로젝트가 실제로 운영되며 배운 것들이다.
 
 ---
 

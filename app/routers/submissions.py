@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.requests import ClientDisconnect
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -157,7 +158,20 @@ async def submit_upload(
         status=SubmissionStatus.QUEUED,
     )
     db.add(submission)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 동시 제출 경합. 위의 has_active_submission 검사를 두 요청이 나란히 통과할 수
+        # 있어서(TOCTOU), 최종 방어선은 DB의 부분 유니크 인덱스 uq_team_active_submission이다.
+        #
+        # **여기서 파일을 반드시 지워야 한다.** 이미 250MB를 디스크에 쓴 뒤인데 제출
+        # 레코드가 없으면, prune_team_files는 team.submissions만 훑으므로 이 파일을
+        # 영원히 찾지 못한다. 마감 직전에 버튼을 두 번 누르는 것만으로 재현된다.
+        db.rollback()
+        dest_path.unlink(missing_ok=True)
+        return redirect_with_error(
+            "이전 제출의 결과가 아직 나오지 않았습니다. 결과가 확정된 후 다시 업로드해주세요."
+        )
 
     if as_json:
         return JSONResponse({"ok": True, "redirect": "/submit"})

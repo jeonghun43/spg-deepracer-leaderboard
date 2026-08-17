@@ -937,9 +937,21 @@ while True:
 ## 5. `app/render.py` — 템플릿 엔진 + 커스텀 필터
 
 ```python
+import datetime as dt
+
 from fastapi.templating import Jinja2Templates
 
+from app.config import KST
+
 templates = Jinja2Templates(directory="app/templates")
+
+
+def kst(value: dt.datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """저장된 UTC 시각을 화면에 한국시간으로 찍는다."""
+    if value is None:
+        return ""
+    return value.astimezone(KST).strftime(fmt)
+
 
 # DRFC가 남기는 종료 사유를 참가자가 이해할 수 있는 말로 옮긴다.
 # 이 표에 없는 값은 원문을 그대로 보여준다 — 모르는 사유를 감추면 원인 추적이 어려워진다.
@@ -971,7 +983,30 @@ def failure_summary(result) -> str:
 
 
 templates.env.filters["failure_summary"] = failure_summary
+templates.env.filters["kst"] = kst
 ```
+
+### 왜 시간대를 필터로 바꾸는가 — 환경변수로 하면 안 되나
+
+**[쉬움]** DB에 담긴 시각은 틀리지 않았다. **보여줄 때** 한국시간으로 바꿔주는 일이 빠져 있었다.
+
+**[전공]**
+시각 컬럼은 전부 `DateTime(timezone=True)` → PostgreSQL `TIMESTAMPTZ`라, 저장된
+값(시점)은 언제나 정확하다. 문제는 psycopg2가 그 값을 **DB 세션의 시간대**로 aware
+datetime을 만들어 돌려준다는 것이다. 컨테이너에 시간대 설정이 없어 그게 UTC였고,
+템플릿이 `submitted_at.strftime(...)`으로 그대로 찍어 참가자와 관리자 화면에 9시간
+이른 시각이 보였다 (2026-08-18 발견 — 대회 마감 시각을 확인하다 드러났다).
+
+컨테이너에 `TZ=Asia/Seoul`을 주는 방법도 있다. 쓰지 않은 이유는 두 가지다.
+
+1. **웹 컨테이너의 `TZ`만으로는 안 고쳐진다.** 돌아오는 datetime의 오프셋을 정하는 건
+   파이썬의 로컬 시간대가 아니라 **Postgres 세션 시간대**다. `PGTZ`까지 맞춰야 한다.
+2. **화면에 찍히는 시간대가 코드 어디에도 안 보이게 된다.** 배포 환경 설정에만 의존해서,
+   서버를 옮기거나 compose 파일을 새로 쓰면 조용히 다시 UTC로 돌아간다.
+
+표시 직전에 명시적으로 변환하면 8단계의 규칙 — **저장·공유는 UTC, 표시와 비즈니스
+규칙은 KST** — 이 코드에 그대로 드러난다. `quota.py`의 `today_kst()`가 하루 한도
+경계에 대해 하는 일을, `kst` 필터가 화면에 대해 하는 셈이다.
 
 ### 왜 `render.py`가 별도 모듈인가
 

@@ -1,6 +1,28 @@
+import datetime as dt
+
 from fastapi.templating import Jinja2Templates
 
+from app.config import KST
+
 templates = Jinja2Templates(directory="app/templates")
+
+
+def kst(value: dt.datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """저장된 UTC 시각을 화면에 한국시간으로 찍는다.
+
+    DB 컬럼은 `TIMESTAMPTZ`라 값 자체는 늘 정확하지만, psycopg2는 **DB 세션의
+    시간대**로 aware datetime을 돌려준다. 컨테이너에 시간대 설정이 없어 그 값이
+    UTC이고, 템플릿이 그대로 `strftime` 하면 참가자와 관리자에게 9시간 이른 시각이
+    보인다 (2026-08-18 발견 — 대회 마감 시각을 확인하다 드러났다).
+
+    컨테이너 `TZ`/`PGTZ` 환경변수로 맞추는 방법도 있지만 일부러 쓰지 않는다.
+    그 방식은 **화면에 찍히는 시간대가 코드 어디에도 안 보이고** 배포 환경 설정에만
+    의존해서, 서버를 옮기면 조용히 다시 UTC로 돌아간다. 표시 직전에 명시적으로
+    변환하는 편이 8단계 문서의 규칙("저장·공유는 UTC, 표시는 KST")과도 맞는다.
+    """
+    if value is None:
+        return ""
+    return value.astimezone(KST).strftime(fmt)
 
 # DRFC가 남기는 종료 사유를 참가자가 이해할 수 있는 말로 옮긴다.
 # 이 표에 없는 값은 원문을 그대로 보여준다 — 모르는 사유를 감추면 원인 추적이 어려워진다.
@@ -37,3 +59,4 @@ def failure_summary(result) -> str:
 
 
 templates.env.filters["failure_summary"] = failure_summary
+templates.env.filters["kst"] = kst

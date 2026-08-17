@@ -125,7 +125,7 @@
     {% for s in submissions %}
     <tr>
       <td>{{ s.team.name }}</td>
-      <td>{{ s.submitted_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ s.submitted_at | kst }}</td>
       <td><span class="badge status-{{ s.status.value }}">{{ s.status.value }}</span></td>
       <td>
         {% if s.status.value == 'error' %}{{ s.error_message or '-' }}
