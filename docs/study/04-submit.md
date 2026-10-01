@@ -1208,8 +1208,8 @@ def get_daily_done_count(db: Session, team: Team, on_date: dt.date | None = None
     stmt = select(func.count()).where(
         Submission.team_id == team.id,
         Submission.status == SubmissionStatus.DONE,
-        Submission.finished_at >= day_start,
-        Submission.finished_at < day_end,
+        Submission.submitted_at >= day_start,
+        Submission.submitted_at < day_end,
     )
     done_count = db.execute(stmt).scalar_one()
 
@@ -1240,40 +1240,47 @@ naive와 aware를 비교하면 파이썬은 `TypeError`를 낸다. **다행이�
 ### 7-2. 하루 경계 계산 — 반열린 구간
 
 ```python
-Submission.finished_at >= day_start,
-Submission.finished_at <  day_end,
+Submission.submitted_at >= day_start,
+Submission.submitted_at <  day_end,
 ```
 
 **왜 `<=` day_end가 아니라 `<` day_end인가?**
-`<=`면 자정 정각에 끝난 제출이 **어제와 오늘 양쪽에 카운트**된다.
+`<=`면 자정 정각에 올린 제출이 **어제와 오늘 양쪽에 카운트**된다.
 반열린 구간 `[start, end)` 은 이 중복을 원천 차단한다.
 
-**왜 `DATE(finished_at) = '2026-07-26'`을 안 쓰나?**
+**왜 `DATE(submitted_at) = '2026-07-26'`을 안 쓰나?**
 컬럼에 함수를 씌우면 **인덱스를 못 쓴다**(sargable하지 않음).
 범위 비교는 인덱스를 탄다. 지금 규모에선 차이가 없지만 **습관이 중요하다.**
 
-### 7-3. **`finished_at` 기준인 것의 의미**
+### 7-3. **`submitted_at` 기준인 것의 의미** (2026-09-11 변경)
 
-카운트 기준이 `submitted_at`이 아니라 **`finished_at`(완료 시각)** 이다.
+카운트 기준은 **`submitted_at`(제출 시각)** 이다. 처음에는 `finished_at`(완료 시각)이었다.
 
 **시나리오:**
 ```
 23:55  팀A 제출         → submitted_at = 7/26 23:55
 00:05  평가 완료         → finished_at  = 7/27 00:05
 ```
-→ 이 제출은 **7월 27일** 카운트에 들어간다.
+→ 이 제출은 **7월 26일** 카운트에 들어간다. `finished_at` 기준이던 때는 7월 27일이었다.
 
-**찬성 논리**: spec의 정의가 "평가가 끝까지 정상 실행됐는지"다.
-`status == DONE`은 `finished_at`이 채워지는 순간 확정되므로 **상태와 시각의 기준이 일치**한다.
+**왜 바꿨나.**
+- **늦게 올린 팀만 손해를 봤다.** 2회를 쓴 팀이 23:55에 3회째를 올리면, 26일은 2회로 끝나고 27일은 2회만 남았다.
+  이틀에 6회가 아니라 5회다.
+- **참가자가 이해하는 규칙과 달랐다.** "오늘 올린 건 오늘 횟수"가 직관이다.
+- **평가 서버가 멈추면 틈이 커졌다.** 밤새 워커가 꺼져 있다가 아침에 켜지면, 밤에 제출된 것들이 **전부 아침 날짜로**
+  카운트되어 그날 오전에 이미 한도를 소진한 상태가 됐다.
 
-**허점**: 자정 근처에 한도를 살짝 넘겨 쓸 수 있다.
-동시 제출 1건 제약 때문에 크게 악용되진 않는다(10분에 1건).
-**하지만 이건 알고 있어야 할 규칙의 틈이다.**
+**`finished_at` 기준의 찬성 논리는 무엇이었나.** "상태와 시각의 기준이 일치한다" — `status == DONE`은 `finished_at`이
+채워지는 순간 확정되기 때문이다. 하지만 **`status == DONE` 조건은 그대로 남아 있으므로**, 기준 시각만 바꿔도
+spec의 정의("평가가 끝까지 정상 실행된 것만 센다")는 깨지지 않는다.
 
-> **평가 서버가 멈춰 있으면 이 틈이 커진다.**
-> 밤새 워커가 꺼져 있다가 아침에 켜지면, 밤에 제출된 것들이 **전부 아침 날짜로** 카운트된다.
-> → 그날 오전에 이미 한도를 소진한 상태가 된다.
-> **운영자가 알고 있어야 할 부작용이다.**
+**새 기준에 허점은 없나?** 23:55에 올린 제출은 00:05에 끝나면서 **이미 지난 날**의 카운트를 올린다. 하지만 그날의
+업로드 검사는 이미 끝났으므로 누구에게도 영향이 없다. 한도를 넘겨 쓸 수도 없다 — 업로드할 때마다 그날 제출분 중
+완료 건수를 세는데, **동시 제출 1건 제약**(7-5) 때문에 앞 제출이 끝나야 다음을 올릴 수 있어서 검사 시점의
+카운트가 항상 정확하다.
+
+> **덤으로 시계 문제도 줄었다.** `finished_at`은 워커 기기의 시계(`now_utc()`)가 찍지만, `submitted_at`은
+> DB의 `server_default=func.now()`가 찍는다. 하루 한도가 워커 기기의 시계 오차에 흔들리지 않는다(8단계 C9).
 
 ### 7-4. 보정 델타 로직
 
@@ -1455,7 +1462,7 @@ path = resolve_storage_path(stored_path)
 25. PRG 패턴이 없으면 F5를 눌렀을 때 무슨 일이 생기는가? 307이면?
 26. 에러를 쿼리 파라미터로 넘기는 방식의 문제 3가지는? JS 경로에서는 왜 사라지는가?
 27. `day_end`를 `<=`가 아니라 `<`로 비교하는 이유는?
-28. 하루 카운트가 `finished_at` 기준인 것의 장점과 허점은? 워커가 밤에 꺼져 있으면?
+28. 하루 카운트를 `finished_at`에서 `submitted_at` 기준으로 바꾼 이유는? 동시 제출 1건 제약이 새 기준에서 하는 역할은?
 29. `max(done_count, 0)`이 막는 시나리오는?
 30. `has_active_submission`이 `first()`가 아니라 `scalar_one_or_none()`인 것의 의미는?
 31. 왜 DB에 절대 경로를 저장하면 안 되는가? `_reroot`가 "마지막" storage를 찾는 이유는?
@@ -1527,7 +1534,7 @@ start = dt.datetime.combine(d, dt.time.min, tzinfo=KST)
 print(start)                              # 2026-07-26 00:00:00+09:00
 print(start.astimezone(dt.timezone.utc))  # 2026-07-25 15:00:00+00:00  ← UTC로는 전날!
 ```
-DB의 `finished_at`을 psql로 보고 어느 날짜로 카운트되는지 손으로 계산해보라.
+DB의 `submitted_at`을 psql로 보고 어느 날짜로 카운트되는지 손으로 계산해보라.
 
 **실험 H — 경로 유틸 테스트 읽고 추가하기**
 ```bash

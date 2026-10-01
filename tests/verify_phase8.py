@@ -290,16 +290,24 @@ admin.post(f"/admin/teams/{team_b_id}/disqualify", {})  # 원복
 
 # ── T045 하루 제출 한도 경계 ────────────────────────────────────────────
 
-print("\n=== T045 하루 제출 한도 경계 (한도 5회) ===")
+# 한도는 .env(DAILY_SUBMISSION_LIMIT)로 바뀔 수 있으므로 설정값에서 끌어와 계산한다.
+# 숫자를 박아두면 한도를 조정할 때마다 이 스크립트가 조용히 깨진다 (실제로 5→3에서 깨졌다).
+limit = settings.daily_submission_limit
 
-admin.post(f"/admin/teams/{team_a_id}/daily-count", {"count": "4"})
+print(f"\n=== T045 하루 제출 한도 경계 (한도 {limit}회) ===")
+
+admin.post(f"/admin/teams/{team_a_id}/daily-count", {"count": str(limit - 1)})
 status, _, body = team_a.get("/submit")
-check("관리자 카운트 조정 = 4 반영 (잔여 1/5)", "1 / 5" in body, "잔여 표기 확인 실패")
+check(
+    f"관리자 카운트 조정 = {limit - 1} 반영 (잔여 1/{limit})",
+    f"1 / {limit}" in body,
+    "잔여 표기 확인 실패",
+)
 
 status, err = submit_model(team_a)
-check("5번째 제출 접수", status == 303 and not err, f"error={err}")
-sub5 = latest_submission_id(team_a_id)
-finish_submission(sub5, finished=False, lap_time=None)  # 미완주도 카운트 대상
+check(f"{limit}번째 제출 접수", status == 303 and not err, f"error={err}")
+sub_last = latest_submission_id(team_a_id)
+finish_submission(sub_last, finished=False, lap_time=None)  # 미완주도 카운트 대상
 
 db = SessionLocal()
 count_after = None
@@ -309,13 +317,20 @@ try:
     count_after = get_daily_done_count(db, db.get(Team, team_a_id))
 finally:
     db.close()
-check("미완주 제출이 카운트에 포함 (4 → 5)", count_after == 5, f"count={count_after}")
+check(
+    f"미완주 제출이 카운트에 포함 ({limit - 1} → {limit})",
+    count_after == limit,
+    f"count={count_after}",
+)
 
 status, err = submit_model(team_a)
-check("6번째 제출 차단", "한도" in err, f"error={err}")
+check(f"{limit + 1}번째 제출 차단", "한도" in err, f"error={err}")
 
 before = submission_count(team_a_id)
-admin.post(f"/admin/teams/{team_a_id}/daily-count", {"count": "3"})
+# 확장자 검사는 한도 검사 **뒤**에 실행된다. 카운트를 한도 아래로 되돌려 놓지 않으면
+# "허용되지 않는 형식"이 아니라 "한도 초과"가 잡혀 이 검사가 의미를 잃는다.
+count_below_limit = limit - 1
+admin.post(f"/admin/teams/{team_a_id}/daily-count", {"count": str(count_below_limit)})
 status, err = submit_model(team_a, filename="model.txt")
 check("허용되지 않는 확장자 거부", "허용되지 않는" in err, f"error={err}")
 check("업로드 오류는 제출로 기록되지 않음", submission_count(team_a_id) == before, "제출 레코드가 생김")
@@ -327,7 +342,7 @@ try:
     count_now = get_daily_done_count(db, db.get(Team, team_a_id))
 finally:
     db.close()
-check("업로드 오류는 카운트에 미포함", count_now == 3, f"count={count_now}")
+check("업로드 오류는 카운트에 미포함", count_now == count_below_limit, f"count={count_now}")
 
 # ── T046 동시 제출 제한 & 큐 순차 처리 ──────────────────────────────────
 

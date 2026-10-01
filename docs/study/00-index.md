@@ -115,6 +115,7 @@
 | 6 | [06-worker.md](06-worker.md) | `worker/*` `worker_status.py` `internal.py` | 워커가 죽으면 그 제출은? 웹이 죽으면? 두 실패가 왜 다르게 처리되나? |
 | 7 | [07-ops.md](07-ops.md) | `Dockerfile` `docker-compose*.yml` `Caddyfile` | 개발용과 운영용 compose가 왜 다른가? 필수 환경변수를 왜 기동 실패로 강제하나? |
 | 8 | [08-crosscutting.md](08-crosscutting.md) | 전체 | 시간·실패·동시성·은닉을 한 번에 정리 + 졸업 시험 |
+| 9 | [09-drfc-internals.md](09-drfc-internals.md) | (외부) `deepracer-simapp` `deepracer-for-cloud` | 우리가 부르는 `dr-start-evaluation` 아래는 어떻게 생겼나? 트랙·자동차·학습은 무엇으로 만들어졌나? |
 
 ---
 
@@ -129,7 +130,7 @@
 
 ### Q2. 왜 큐를 DB 테이블로 만들었는가?
 Redis/Celery를 붙이면 운영할 프로세스가 하나 더 늘고, "DB에는 done인데 큐에는 남아있는"
-**이중 진실(dual source of truth)** 문제가 생긴다. 하루 50건 규모에서는 DB 폴링이 압도적으로 단순하다.
+**이중 진실(dual source of truth)** 문제가 생긴다. 하루 30건 규모에서는 DB 폴링이 압도적으로 단순하다.
 
 ### Q3. 왜 상태(status)를 이렇게 집요하게 관리하는가?
 `queued → running → done/error`, 그리고 되돌아오는 `running → queued`.

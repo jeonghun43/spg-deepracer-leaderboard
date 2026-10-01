@@ -643,11 +643,11 @@ started_at:   Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True)
 
 이게 없으면 하루 한도 계산이 깨진다:
 ```python
-# app/quota.py:24-31
+# app/quota.py:30-37
 day_start = dt.datetime.combine(on_date, dt.time.min, tzinfo=KST)   # aware
-stmt = select(...).where(Submission.finished_at >= day_start)        # 비교
+stmt = select(...).where(Submission.submitted_at >= day_start)       # 비교
 ```
-`finished_at`이 naive면 **파이썬은 TypeError를 내고, DB는 조용히 틀린 결과**를 낸다.
+`submitted_at`이 naive면 **파이썬은 TypeError를 내고, DB는 조용히 틀린 결과**를 낸다.
 
 그리고 `worker_status.py`도 aware 비교에 의존한다:
 ```python

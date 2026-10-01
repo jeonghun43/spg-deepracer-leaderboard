@@ -3,6 +3,12 @@
 카운트 기준: "완주 성공 여부"가 아니라 "평가가 끝까지 정상 실행됐는지"다.
 DONE 상태(완주든 미완주-타임아웃이든)만 카운트하고, ERROR(업로드 실패·DRFC 실행
 오류)는 카운트에서 제외한다. 하루는 한국 시간(KST) 자정 기준으로 리셋된다.
+
+어느 날의 횟수인지는 **제출 시각(submitted_at)** 이 정한다 (2026-09-11 결정). 23:59에 올린
+제출이 대기열 때문에 자정 이후에 끝나도 올린 날의 횟수다. 처음에는 완료 시각(finished_at)
+기준이었는데, 자정 무렵 제출이 다음 날 한도를 깎아 늦게 올린 팀만 손해를 봤고 참가자가
+이해하는 규칙("오늘 올린 건 오늘 횟수")과도 달랐다. 평가 서버가 밤새 멈췄다가 아침에 몰아서
+처리하면 전날 밤 제출이 전부 아침 한도를 깎는 문제도 함께 사라진다.
 """
 
 import datetime as dt
@@ -26,8 +32,8 @@ def get_daily_done_count(db: Session, team: Team, on_date: dt.date | None = None
     stmt = select(func.count()).where(
         Submission.team_id == team.id,
         Submission.status == SubmissionStatus.DONE,
-        Submission.finished_at >= day_start,
-        Submission.finished_at < day_end,
+        Submission.submitted_at >= day_start,
+        Submission.submitted_at < day_end,
     )
     done_count = db.execute(stmt).scalar_one()
 

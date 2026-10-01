@@ -11,6 +11,7 @@
 <div class="card">
   <h2 style="margin-top:0;">오늘 제출 현황</h2>
   <p>남은 제출 횟수: <strong>{{ remaining }} / {{ daily_limit }}</strong></p>
+  <p class="muted">하루는 한국 시간 자정에 초기화되며, <strong>제출한 시각</strong>의 날짜로 셉니다 — 자정 직전에 올린 제출은 평가가 자정 이후에 끝나도 그날 횟수입니다. 오류로 끝난 제출은 세지 않습니다.</p>
 
   {% if active_submission %}
     <p>

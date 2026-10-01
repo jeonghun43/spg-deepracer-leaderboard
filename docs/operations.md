@@ -625,7 +625,7 @@ PY
   이전부터 있던 증상이다(관련 [DRFC 이슈 #67](https://github.com/aws-deepracer-community/deepracer-for-cloud/issues/67)).
   리더보드는 영상이 없으면 "—"로 표시하므로 순위·기록에는 영향이 없다. 원인을 해결하면
   그 이후 평가부터 코드 변경 없이 영상이 자동으로 붙는다.
-- 관리자 화면의 "오늘 완료 카운트"는 지정한 값이 그 시점 기준으로 맞춰지는 **보정값**이다.
+- 관리자 화면의 "오늘 카운트 — 오늘 제출분 중 완료"(예전 이름: 오늘 완료 카운트)는 지정한 값이 그 시점 기준으로 맞춰지는 **보정값**이다.
   지정한 뒤에 완료되는 평가는 그대로 누적되므로 하루 한도는 계속 정상 동작한다.
 - 평가 서버(EC2) 구축·복원·비용 관리 절차는 [worker-server-setup.md](worker-server-setup.md) 참고.
   (옛 [gpu-server-migration.md](../specs/001-online-virtual-evaluation/gpu-server-migration.md)는

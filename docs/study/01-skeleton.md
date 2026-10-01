@@ -585,7 +585,7 @@ class Settings(BaseSettings):
     storage_dir: Path = BASE_DIR / "storage"
 
     # spec.md에서 확정한 규칙
-    daily_submission_limit: int = 5
+    daily_submission_limit: int = 3
     online_eval_laps: int = 3
     eval_minutes_estimate: int = 10
     model_upload_max_bytes: int = 500 * 1024 * 1024
