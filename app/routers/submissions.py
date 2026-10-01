@@ -1,4 +1,5 @@
 import datetime as dt
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -12,11 +13,19 @@ from app.db import get_db
 from app.deps import get_current_team
 from app.models import Season, SeasonStatus, Submission, SubmissionStatus, Team
 from app.quota import get_remaining_submissions, has_active_submission, today_kst
+from app.records import get_latest_done_submission
 from app.render import templates
 from app.storage_paths import to_storage_relative
 from app.worker_status import get_worker_status
 
 router = APIRouter(tags=["submissions"])
+
+# 관리자가 공지 문구를 비워 두고 업로드를 중지했을 때 참가자에게 보여줄 기본 문구.
+DEFAULT_UPLOADS_PAUSED_MESSAGE = "평가 서버 점검 중이라 모델 업로드를 잠시 중지했습니다. 점검이 끝나면 다시 제출할 수 있습니다."
+
+
+def uploads_paused_message(season: Season) -> str:
+    return season.uploads_paused_message or DEFAULT_UPLOADS_PAUSED_MESSAGE
 
 
 def wants_json_response(accept_header: str | None) -> bool:
@@ -53,6 +62,9 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
         .order_by(Submission.submitted_at.desc())
         .limit(1)
     ).scalar_one_or_none()
+    # 직전 주행 영상 카드용 — 가장 최근에 평가가 끝난 제출. 새 제출이 대기/평가 중이거나
+    # 마지막 제출이 오류여도 그 이전 완료분을 보여준다 (영상은 retention이 이 제출 것을 남긴다).
+    latest_done_submission = get_latest_done_submission(team)
     queue_position = _queue_position(db, active_submission) if active_submission else None
     # 평가는 한 번에 한 건씩 순차 처리되므로, 앞선 건들 + 자기 건을 곱해 대략적인 대기 시간을 낸다.
     estimated_wait_minutes = (
@@ -64,6 +76,7 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
         and active_submission is None
         and remaining > 0
         and not team.disqualified
+        and not season.uploads_paused
     )
     return templates.TemplateResponse(
         request,
@@ -73,6 +86,8 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
             "season": season,
             "active_submission": active_submission,
             "latest_submission": latest_submission,
+            "latest_done_submission": latest_done_submission,
+            "uploads_paused_message": uploads_paused_message(season) if season.uploads_paused else None,
             "queue_position": queue_position,
             "estimated_wait_minutes": estimated_wait_minutes,
             "remaining": remaining,
@@ -104,12 +119,16 @@ async def submit_upload(
         # 리다이렉트로 답하면 고른 파일이 사라져 참가자가 처음부터 다시 해야 한다.
         if as_json:
             return JSONResponse({"ok": False, "error": message}, status_code=400)
-        return RedirectResponse(f"/submit?error={message}", status_code=303)
+        # 관리자가 쓴 공지 문구(업로드 중지)도 여기로 온다. &나 #이 섞이면 쿼리가 잘리므로 인코딩한다.
+        return RedirectResponse(f"/submit?error={quote(message, safe='')}", status_code=303)
 
     if team.disqualified:
         return redirect_with_error("실격 처리된 팀은 제출할 수 없습니다.")
     if season.status != SeasonStatus.ACTIVE:
         return redirect_with_error("현재 제출을 받지 않는 대회입니다.")
+    if season.uploads_paused:
+        # 중지 전에 페이지를 열어 둔 참가자는 폼이 그대로 보인다. 화면만 숨겨서는 못 막는다.
+        return redirect_with_error(uploads_paused_message(season))
     if has_active_submission(db, team) is not None:
         return redirect_with_error(
             "이전 제출의 결과가 아직 나오지 않았습니다. 결과가 확정된 후 다시 업로드해주세요."

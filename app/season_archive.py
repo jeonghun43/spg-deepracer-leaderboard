@@ -20,7 +20,8 @@ def archive_season(db: Session, season: Season, videos_dir: Path) -> None:
     for team in season.teams:
         # 최고기록 외 파일 삭제 규칙은 평가 직후 정리와 동일하므로 공용 함수를 쓴다
         # (app/retention.py). 평가 중에 이미 정리됐다면 여기서는 남은 것만 지운다.
-        prune_team_files(team, videos_dir)
+        # 평가 직후 정리와 달리 직전 제출 영상도 지운다 — 대회가 끝나 볼 사람이 없다.
+        prune_team_files(team, videos_dir, keep_latest_video=False)
 
         if team.account is not None:
             db.delete(team.account)

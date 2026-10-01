@@ -56,7 +56,7 @@
 | [app/quota.py:27-49](app/quota.py:27) | KST 자정 기준 하루 한도 (제출 시각 기준) | Quota policy | DOMAIN | **확실** — 하루 경계 계산(:30-31) + DONE만 카운트(:34) + 제출 시각으로 날짜 결정(:35-36) | 구분 불가 |
 | [app/quota.py:42-43](app/quota.py:42) + [models.py:84-88](app/models.py:84) | 카운트 조정을 절대값이 아닌 **델타**로 | Delta over absolute override | DOMAIN | **확실** — 마이그레이션 [a1c4f2b8d907](migrations/versions/a1c4f2b8d907_daily_count_adjustment.py:1)이 이 전환을 기록 | 구분 불가 |
 | [app/retention.py:32-71](app/retention.py:32) | 최고기록 외 파일 삭제 (DB 레코드는 보존) | Retention policy / rule-based GC | DOMAIN | **확실** — 활성 제출 제외(:65), DB 유지 명시(:7) | 구분 불가 |
-| [app/models.py:32-36](app/models.py:32) + [admin.py:32-36](app/routers/admin.py:32) | `preparing→active→closed→archived` | State machine (선형 전이표) | DOMAIN | **유사** — 전이표는 있으나 **전이 가드가 없다**. `advance_status`(:202-217)는 요청만 오면 전진시키고, 역전이 금지는 표에 없어서 성립할 뿐 검증되지 않는다 | 구분 불가 |
+| [app/models.py:32-36](app/models.py:32) + [admin.py:32-36](app/routers/admin.py:32) | `preparing→active→closed→archived` | State machine (선형 전이표) | DOMAIN | ~~**유사** — 전이표는 있으나 **전이 가드가 없다**. `advance_status`(:202-217)는 요청만 오면 전진시키고, 역전이 금지는 표에 없어서 성립할 뿐 검증되지 않는다~~ → **해결 (2026-10-01)**: `change_status`가 `from_status`·`to_status`를 받아, 현재 상태가 `from_status`와 다르면 무변경, 인접 상태(`NEXT_STATUS`·`PREV_STATUS`)만 허용한다. 되돌리기는 아카이브를 뺀 한 단계만. `tests/test_season_status.py` | 구분 불가 |
 | [app/worker_status.py:16-41](app/worker_status.py:16) | 마지막 하트비트 나이로 생사 판정 | Heartbeat / Liveness with stale threshold | ARCH | **확실** — `elapsed <= timedelta(minutes=…)`(:29) | 일반 원칙 |
 | [app/storage_paths.py:60-74](app/storage_paths.py:60) | 컨테이너/호스트 경로 차이 흡수 | Path canonicalization (환경 간 변환 계층) | ARCH | **유사** — "Anti-corruption layer"라 부르기엔 모델 변환이 아니라 경로 문자열 재루팅 한 가지만 한다. 3단계 폴백(:63-65)은 명확 | 구분 불가 |
 | [app/storage_paths.py:23-25](app/storage_paths.py:23) | `..` 세그먼트 거부 | Path traversal 방어 | ARCH | **확실** — `if ".." in parts: raise` | 일반 원칙 |
@@ -155,11 +155,13 @@ submission.status = SubmissionStatus.ERROR   # submission이 None이면 Attribut
 ### 6. 재큐에 시도 횟수 상한이 없다 — head-of-line blocking · [worker/run.py:254-265](worker/run.py:254)
 웹 서버가 오래 죽어 있으면 같은 제출을 30초마다 무한히 다시 집습니다. 워커가 순차 처리([:312](worker/run.py:312))라 그동안 **대기열 뒤쪽은 한 건도 진행되지 않습니다.** 실패 횟수를 세서 일정 횟수 후 뒤로 미루거나 error로 종결하는 출구가 필요합니다.
 
-### 7. 에러 메시지를 URL 인코딩 없이 쿼리스트링에 삽입 · [submissions.py:107](app/routers/submissions.py:107)
+### 7. ~~에러 메시지를 URL 인코딩 없이 쿼리스트링에 삽입~~ → **해결** (2026-10-01) · [submissions.py:123](app/routers/submissions.py:123)
 ```python
 return RedirectResponse(f"/submit?error={message}", status_code=303)
 ```
 현재 메시지들에는 `&`·`#`가 없어 **지금은 터지지 않습니다**(잠재적 결함). 다만 [:118](app/routers/submissions.py:118)처럼 설정값을 끼워 넣는 문구가 있어, 문구를 한 번 고치면 조용히 깨집니다. `urllib.parse.quote` 한 줄이면 됩니다. XSS는 Jinja 자동 이스케이프([submit.html:7](app/templates/submit.html:7))로 막혀 있습니다.
+
+**해결 경위**: 업로드 일시 중지 기능이 들어오면서 관리자가 직접 쓴 공지 문구가 이 경로로 가게 됐습니다. "잠재적"이던 결함이 실제로 터질 수 있게 된 것입니다. 그래서 `quote(message, safe='')`로 인코딩하도록 고쳤습니다. 회귀 테스트는 `tests/test_upload_pause.py::test_paused_message_survives_the_redirect_query`입니다.
 
 ### 8. N+1 쿼리 — 규모 전제에만 의존 · [admin.py:175](app/routers/admin.py:175), [leaderboard.py:42-47](app/routers/leaderboard.py:42)
 `{team.id: get_daily_done_count(db, team) for team in season.teams}`는 팀당 COUNT 1회, `build_leaderboard`는 팀당 `team.submissions` 지연 로딩입니다. [records.py:3](app/records.py:3)이 "시즌당 약 10팀"을 근거로 캐시 없음을 정당화하는데, **그 상한은 코드 어디에도 강제돼 있지 않습니다**([MAX_BULK_TEAMS=50](app/routers/admin.py:39)은 1회 등록 상한일 뿐 누적 상한이 아님). 지금 고칠 필요는 없지만, 전제가 깨지는 지점이 문서에만 있고 코드에 없다는 것이 문제입니다.

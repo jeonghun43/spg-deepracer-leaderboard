@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
-from app.routers import admin, auth, internal, leaderboard, submissions
+from app.routers import admin, auth, internal, leaderboard, media, submissions
 
 # 자동 생성 문서는 공개하지 않는다. API를 쓰는 외부 소비자가 없고(워커는 고정된 /internal
 # 경로만 호출한다), 열어두면 관리자·워커 엔드포인트의 존재와 요청 형식이 그대로 드러난다.
@@ -24,11 +24,13 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 settings.videos_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/media/videos", StaticFiles(directory=str(settings.videos_dir)), name="videos")
+# 평가 영상은 StaticFiles로 공개하지 않는다 — 최고기록이 아닌 직전 제출 영상은 그 팀만 봐야 해서
+# 권한을 확인하는 라우트(app/routers/media.py)로 내준다.
 
 app.include_router(auth.router)
 app.include_router(submissions.router)
 app.include_router(leaderboard.router)
+app.include_router(media.router)
 app.include_router(admin.router)
 # 관리자 로그인 폼 — .env의 ADMIN_LOGIN_PATH가 정하는 비밀 경로에 붙는다.
 app.include_router(admin.login_router)

@@ -653,7 +653,7 @@ submission = db.get(Submission, submission_id)  # ← 다시 조회
 
 ```python
 def prune_finished_team_files(db: Session, submission_id: int) -> None:
-    """평가가 끝난 팀의 파일을 보존 정책대로 정리한다 (최고기록만 남긴다).
+    """평가가 끝난 팀의 파일을 보존 정책대로 정리한다 (최고기록 + 직전 제출 영상만 남긴다).
 
     시즌 종료까지 기다리면 디스크가 먼저 찬다 (모델 1건 약 250MB).
 
@@ -719,16 +719,37 @@ def prune_submission_team(submission_id: int, _: None = Depends(require_worker),
 ### `retention.py` 안전장치
 
 ```python
+best_submission, _ = get_team_best(team)
+latest_done = get_latest_done_submission(team) if keep_latest_video else None
+
 for submission in team.submissions:
     if best_submission is not None and submission.id == best_submission.id:
         continue                    # ① 최고기록은 안 지운다
     if submission.status.value in ACTIVE_SUBMISSION_STATUSES:
         continue                    # ② 평가 대기/진행 중인 것은 안 지운다
-    removed += remove_submission_files(submission, videos_dir)
+    keep_video = latest_done is not None and submission.id == latest_done.id
+    removed += remove_submission_files(submission, videos_dir, keep_video=keep_video)
+                                    # ③ 직전 완료 제출은 모델만 지우고 영상은 남긴다
 ```
 
 **②가 없으면 워커가 평가하려는 파일을 스스로 지운다.**
 그리고 삭제 후 `result.video_path = None` — 깨진 링크 방지(5단계).
+
+**③은 나중에 추가됐다 (2026-10-01).** 처음에는 최고기록 외 영상을 전부 지웠다.
+그러다 보니 완주 못 한 제출의 영상은 업로드되고 **몇 초 뒤에** 사라졌다. `finally`에서 바로
+prune을 하기 때문이다. 참가자가 받는 정보는 "완주 실패 (45%) · 트랙 이탈" 같은 한 줄뿐이었고,
+**어디서** 탈선하는지는 볼 수 없었다. 그래서 보상 함수를 고칠 근거가 없었다.
+
+- **[쉬움]** 가장 최근에 끝난 주행 한 편은 남겨서 참가자가 다시 보게 한다. 대신 모델 파일(250MB)은
+  지금처럼 지운다. 디스크를 잡아먹는 것은 모델이고, 영상은 팀당 하나 더 남는 정도다.
+- **[전공]** "직전"은 `status == DONE`이고 result가 있는 제출 중 가장 최근 것이다
+  (`records.get_latest_done_submission`). 대기·평가 중이거나 오류로 끝난 제출은 영상이 없으므로
+  건너뛰고, 새 제출이 평가 중인 동안에도 그 이전 완료분의 영상이 남아 있다.
+  새 제출이 끝나면 다음 prune에서 그 제출이 "직전"이 되고, 이전 영상은 지워진다.
+  그래서 팀당 영상은 **최대 2개**(최고기록 + 직전)다.
+- **시즌 아카이브는 `keep_latest_video=False`로 부른다.** 대회가 끝나면 그 영상을 볼 사람이 없다.
+- 이 영상은 그 팀만 봐야 해서 StaticFiles 공개 mount를 없애고 권한 확인 라우트로 바꿨다
+  (1단계 §2-3, `app/routers/media.py`).
 
 ### 105GB 문제
 
@@ -1031,6 +1052,27 @@ return "timeout", None, off_track_total
 
 **규칙**: "3바퀴 모두 100% 완주해야 완주. 랩타임은 그 3바퀴 합계."
 `completed[:required_laps]` — 4바퀴를 성공했어도 **앞 3개만** 센다.
+
+**이탈 횟수(`off_track_total`)는 모든 trial의 합이다.** 완주 여부와 상관없이 센다.
+참가자 제출 탭에 "트랙 이탈 N회"로 나온다.
+
+**함정: metrics가 비면 이탈 횟수는 무조건 0이다.** trial이 하나도 없으면 합할 것도 없다.
+그런데 metrics가 비는 경우는 "한 바퀴도 못 끝낸 제출"이다. 탈선 정보가 가장 필요한 바로 그 제출이
+"탈선 0회"로 보이게 된다. 그래서 진행률(§9-4)처럼 **로그에서 따로 센다**:
+
+```python
+# worker/run.py
+if not metrics.get("metrics"):
+    logged_off_track = drfc.count_off_track_from_log(log_path_for(submission.id))
+    if logged_off_track is not None:
+        off_track = logged_off_track
+```
+
+`count_off_track_from_log`는 `SIM_TRACE_LOG` 상태 필드가 `off_track`인 **줄 수**를 센다.
+줄 수를 그대로 세도 되는지는 실제 로그로 확인했다(2026-10-01). 이탈 1회마다 `off_track` 스텝이
+**정확히 한 줄** 찍히고 곧바로 `pause`(리셋)로 넘어간다. 저장된 로그 17·21·23번에서 센 값이
+metrics json의 trial별 `off_track_count` 합과 모두 같았다.
+로그 파일이 없으면 `None`을 돌려주고, 호출부는 0을 그대로 둔다.
 
 **이 함수는 순수 함수다** — `tests/test_evaluation_parsing.py`로 쉽게 테스트된다.
 `summarize_progress`도 마찬가지 (`tests/test_progress_summary.py`).

@@ -66,6 +66,18 @@ class Season(Base):
     )
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # 긴급 패치용 "업로드 일시 중지". 시즌 상태(status)와 따로 두는 이유는 **되돌릴 수 있어야**
+    # 해서다 — status는 진행중 → 마감 → 아카이브로 한 방향으로만 가므로, 막으려고 바꾸면 대회가
+    # 끝나 버린다. 지난 대회 온라인 주행 기간에 평가 서버를 급히 고칠 때 업로드를 막을 방법이
+    # 없었던 것이 계기다. 이미 대기·평가 중인 제출에는 영향이 없다.
+    uploads_paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    uploads_paused_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    uploads_paused_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # 방문자에게 숨김 (plan.md §5.7). 관리자와 **이 시즌의 참가팀**은 계속 본다 — 지난 시즌·테스트 시즌을
+    # 공개 목록에서 치우거나, 비공개 리허설 대회를 돌리기 위한 것이라 팀의 로그인·제출은 막지 않는다.
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
     teams: Mapped[list["Team"]] = relationship(back_populates="season", cascade="all, delete-orphan")
 
 

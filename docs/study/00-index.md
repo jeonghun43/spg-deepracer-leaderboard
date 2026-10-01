@@ -173,17 +173,19 @@ Redis/Celery를 붙이면 운영할 프로세스가 하나 더 늘고, "DB에는
 | `security.py` | bcrypt 해시, 안전한 임의 비밀번호 |
 | `admin_lockout.py` | **관리자 로그인 무차별 대입 잠금** (IP + 아이디 이중 카운터) |
 | `quota.py` | 하루 제출 한도 (KST 자정 기준) |
-| `records.py` | 팀별 최고기록 산출 (리더보드·보존정책 공용) |
-| `retention.py` | 최고기록 외 파일 삭제 |
+| `records.py` | 팀별 최고기록·**직전 완료 제출** 산출 (리더보드·보존정책·제출 화면 공용) |
+| `retention.py` | 최고기록 외 파일 삭제 (**직전 제출 영상은 보존**) |
+| `season_access.py` | **숨김 시즌을 누가 볼 수 있나** (목록·리더보드·영상 공용) |
 | `season_archive.py` | 시즌 종료 처리 |
 | `storage_paths.py` | 컨테이너↔호스트 경로 차이 흡수 |
 | `worker_status.py` | **하트비트로 평가 서버 생존 판정** |
 | `render.py` | Jinja 템플릿 + **`failure_summary` 커스텀 필터** |
 | `seed.py` | 초기 관리자 계정 생성 |
 | `routers/auth.py` | 팀 로그인/로그아웃 |
-| `routers/submissions.py` | 제출 화면·업로드 (**JSON/리다이렉트 이중 응답**) |
+| `routers/submissions.py` | 제출 화면·업로드 (**JSON/리다이렉트 이중 응답**, 업로드 일시 중지 검사) |
 | `routers/leaderboard.py` | 리더보드·시즌 목록 |
-| `routers/admin.py` | 시즌·팀 관리 + **비밀 경로 로그인 폼** |
+| `routers/media.py` | **평가 영상 제공 — 최고기록은 공개, 직전 제출은 그 팀만** |
+| `routers/admin.py` | 시즌·팀 관리 + **비밀 경로 로그인 폼** + 업로드 일시 중지·숨김 토글 + **전이 가드 있는 상태 전환** |
 | `routers/internal.py` | **워커 전용 파일 송수신 API** |
 | `static/upload.js` | **업로드 진행률 표시 (점진적 향상)** |
 

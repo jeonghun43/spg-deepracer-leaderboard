@@ -76,12 +76,24 @@ setsid nohup bash worker/run_worker.sh > /tmp/worker.log 2>&1 < /dev/null &
 ### 로컬에서 전체를 띄워보려면 (개발·비상 복구용)
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
+코드를 고친 뒤에는 `--build`가 있어야 반영된다(코드가 이미지에 구워진다).
+
 웹: http://localhost:8000
-관리자: `.env`의 `ADMIN_LOGIN_PATH`가 정하는 경로 (기본값 `/admin/login`).
-`.env.example`을 그대로 복사했다면 http://localhost:8000/admin/login 이다.
+관리자: http://localhost:8000/admin/login.
+로컬 compose는 `ADMIN_LOGIN_PATH`를 컨테이너에 넘기지 않고, `.env` 파일도 이미지에 들어가지 않는다.
+그래서 노트북 `.env`에 비밀 경로를 적어 두었더라도 로컬에서는 항상 기본값이다.
+
+- 로그인해도 계속 로그인 화면으로 돌아오면, 노트북 `.env`의 `SESSION_HTTPS_ONLY=true`가 넘어가 쿠키가 막힌 것이다.
+  `SESSION_HTTPS_ONLY=false docker compose up -d`로 띄운다.
+- **로컬에는 평가 워커가 없어 제출이 끝나지 않는다.** 직전 제출 영상, 탈선 횟수, 업로드 중지, 시즌 숨김 같은 화면을 보려면
+  평가가 끝난 상태의 데모 데이터를 넣는다. 데모 팀 2개와 관리자 `demo_admin`이 만들어지고, 비밀번호는 그 터미널에만 출력된다.
+
+```bash
+docker compose exec -T web python - < scripts/dev_seed_video_demo.py
+```
 
 > 이 방식은 개발용이거나 클라우드 서버를 못 쓰게 됐을 때의 비상 수단이다. 운영 데이터는
 > 클라우드 서버에 있으므로, 로컬로 되살리려면 백업 복원이 함께 필요하다.

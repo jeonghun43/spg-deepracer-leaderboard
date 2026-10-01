@@ -3,7 +3,8 @@
 {% block content %}
 <h1>{{ season.name }}</h1>
 <p class="muted">트랙: {{ season.track_name }} · 기간: {{ season.start_date }} ~ {{ season.end_date }}</p>
-<p>상태: <span class="badge">{{ status_labels[season.status] }}</span></p>
+<p>상태: <span class="badge">{{ status_labels[season.status] }}</span>
+  {% if season.hidden %}<span class="badge status-hidden">숨김</span>{% endif %}</p>
 
 {% if bulk_error %}
 <div class="card" style="border-color:#c0392b;">
@@ -61,13 +62,58 @@
 </div>
 {% endif %}
 
-{% if next_status %}
-<form method="post" action="/admin/seasons/{{ season.id }}/advance-status" class="inline"
-      onsubmit="return confirm('{{ status_labels[next_status] }}(으)로 전환할까요?{% if next_status.value == 'archived' %} 최고기록이 아닌 제출의 모델/영상 파일과 팀 계정이 삭제됩니다.{% endif %}');">
-  <button type="submit">{{ status_labels[next_status] }}(으)로 전환</button>
-</form>
-{% endif %}
+{# 상태 전환 버튼은 아래 "위험 구역"(팀 등록 폼과 팀 표 사이)에 있다. 예전에는 여기(페이지 맨 위)에 있어서,
+   대시보드에서 시즌 이름을 누르고 들어오다 같은 자리를 한 번 더 누르면 넘어갔다 (plan.md §5.7). #}
 <a href="/leaderboard/{{ season.id }}">공개 리더보드 보기 →</a>
+
+{# 되돌릴 수 있는 설정이라 위험 구역이 아니라 여기 둔다. #}
+<div class="card">
+  <h2 style="margin-top:0;">공개 여부</h2>
+  {% if season.hidden %}
+    <p><span class="badge status-hidden">숨김</span> 일반 방문자에게는 시즌 목록·리더보드·영상이 보이지 않습니다.
+       관리자와 이 시즌의 참가팀에게는 그대로 보입니다.</p>
+    <form method="post" action="/admin/seasons/{{ season.id }}/visibility" class="inline">
+      <input type="hidden" name="action" value="show">
+      <button type="submit">모두에게 공개</button>
+    </form>
+  {% else %}
+    <p><span class="badge status-done">공개</span> 누구나 시즌 목록과 리더보드에서 볼 수 있습니다.</p>
+    <form method="post" action="/admin/seasons/{{ season.id }}/visibility" class="inline"
+          onsubmit="return confirm('이 시즌을 일반 방문자에게 숨길까요? 참가팀의 로그인·제출은 그대로 됩니다.');">
+      <input type="hidden" name="action" value="hide">
+      <button type="submit" class="secondary">방문자에게 숨기기</button>
+    </form>
+  {% endif %}
+</div>
+
+{% if season.status.value == 'active' %}
+{# 긴급 패치용. 시즌 상태 전환과 달리 되돌릴 수 있다 — 새 업로드만 막고 대기열은 그대로 둔다. #}
+<div class="card">
+  <h2 style="margin-top:0;">모델 업로드</h2>
+  {% if season.uploads_paused %}
+    <p><span class="badge status-paused">업로드 중지됨</span>
+      {% if season.uploads_paused_at %}— {{ season.uploads_paused_at | kst }}부터{% endif %}</p>
+    <p class="muted">참가자 공지: {{ season.uploads_paused_message or default_paused_message }}</p>
+    <form method="post" action="/admin/seasons/{{ season.id }}/uploads-pause"
+          onsubmit="return confirm('모델 업로드를 다시 열까요?');">
+      <input type="hidden" name="action" value="resume">
+      <button type="submit">업로드 재개</button>
+    </form>
+  {% else %}
+    <p><span class="badge status-done">업로드 허용</span></p>
+    <form method="post" action="/admin/seasons/{{ season.id }}/uploads-pause"
+          onsubmit="return confirm('참가자의 새 모델 업로드를 중지할까요? 이미 대기·평가 중인 제출은 그대로 처리됩니다.');">
+      <input type="hidden" name="action" value="pause">
+      <div class="field">
+        <label for="pause-message">참가자에게 보일 공지 (비우면 기본 문구)</label>
+        <input type="text" id="pause-message" name="message" maxlength="500" style="width:100%;"
+               placeholder="{{ default_paused_message }}">
+      </div>
+      <button type="submit" class="danger">업로드 중지</button>
+    </form>
+  {% endif %}
+</div>
+{% endif %}
 
 <h2>참가팀</h2>
 <div class="card">
@@ -79,6 +125,38 @@
     <button type="submit">팀 일괄 등록</button>
   </form>
 </div>
+
+{# 위험 구역은 팀 등록 폼과 팀 표 사이에 둔다. 페이지 맨 위는 대시보드에서 시즌을 눌러 들어오는 자리와
+   겹쳐 한 번 더 눌리면 실행됐고, 맨 끝은 제출 표(최대 100줄) 아래라 대회 중에 너무 멀었다.
+   이 자리는 등록 폼 카드가 사이에 있어 겹치지 않고, 스크롤 거리도 팀·제출 수와 상관없이 일정하다.
+   폼은 화면을 그릴 때의 상태(from_status)를 함께 보내 같은 요청이 두 번 가도 한 칸만 움직인다
+   (admin.change_status). #}
+<div class="card danger-zone">
+  <h2 style="margin-top:0;">위험 구역 — 시즌 상태 변경</h2>
+  <p>현재 상태: <span class="badge">{{ status_labels[season.status] }}</span></p>
+  {% if next_status %}
+  <form method="post" action="/admin/seasons/{{ season.id }}/status" class="inline"
+        onsubmit="return confirm('{{ status_labels[next_status] }}(으)로 전환할까요?{% if next_status.value == 'archived' %} 최고기록이 아닌 제출의 모델/영상 파일과 팀 계정이 삭제되며, 되돌릴 수 없습니다.{% endif %}');">
+    <input type="hidden" name="from_status" value="{{ season.status.value }}">
+    <input type="hidden" name="to_status" value="{{ next_status.value }}">
+    <button type="submit" class="danger">{{ status_labels[next_status] }}(으)로 전환</button>
+  </form>
+  {% endif %}
+  {% if prev_status %}
+  <form method="post" action="/admin/seasons/{{ season.id }}/status" class="inline"
+        onsubmit="return confirm('{{ status_labels[prev_status] }}(으)로 되돌릴까요?{% if prev_status.value == 'preparing' %} 참가자는 새 모델을 제출할 수 없게 됩니다. 이미 대기 중인 제출은 계속 평가됩니다.{% endif %}');">
+    <input type="hidden" name="from_status" value="{{ season.status.value }}">
+    <input type="hidden" name="to_status" value="{{ prev_status.value }}">
+    <button type="submit" class="secondary">{{ status_labels[prev_status] }}(으)로 되돌리기</button>
+  </form>
+  {% endif %}
+  {% if next_status and next_status.value == 'archived' %}
+  <p class="muted">아카이브는 되돌릴 수 없습니다. 최고기록 외 파일과 팀 계정이 삭제됩니다. 백업을 먼저 확인하세요.</p>
+  {% elif not next_status %}
+  <p class="muted">아카이브된 시즌은 상태를 바꿀 수 없습니다.</p>
+  {% endif %}
+</div>
+
 <table>
   <thead><tr><th>팀</th><th>제출 수</th><th>오늘 카운트 — 오늘 제출분 중 완료 (한도 {{ daily_limit }})</th><th>비밀번호</th><th>실격</th></tr></thead>
   <tbody>

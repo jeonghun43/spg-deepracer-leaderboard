@@ -56,22 +56,27 @@ def index():
 
 
 @router.get("/leaderboard")
-def leaderboard_entry(request: Request, db: Session = Depends(get_db)):
+def leaderboard_entry(request, db, team=Depends(get_current_team_optional),
+                      admin=Depends(get_current_admin_optional)):
     open_season = get_open_season(db)
     if open_season is not None:
         return RedirectResponse(f"/leaderboard/{open_season.id}", status_code=303)
-    return render_season_list(request, db)
+    return render_season_list(request, db, team, admin)
 
 
 @router.get("/leaderboard/seasons")     # ← 순서 주의
-def season_list(request: Request, db: Session = Depends(get_db)):
-    return render_season_list(request, db)
+def season_list(request, db, team=..., admin=...):
+    return render_season_list(request, db, team, admin)
 
 
 @router.get("/leaderboard/{season_id}")
-def season_leaderboard(season_id: int, request: Request, db: Session = Depends(get_db)):
+def season_leaderboard(season_id: int, request, db, team=..., admin=...):
+    season = db.get(Season, season_id)
+    if season is None or not can_view_season(season, team, admin):
+        return RedirectResponse("/leaderboard", status_code=303)
     ...
 ```
+(`team`·`admin`은 2026-10-01 시즌 숨김 기능 때 붙었다 — 아래 "숨김 시즌" 절)
 
 ### 흐름
 
@@ -107,7 +112,7 @@ def get_open_season(db: Session) -> Season | None:
     """지금 열려있는(진행중) 시즌. 운영상 한 번에 하나지만, 실수로 둘이 되어도
     화면이 흔들리지 않도록 가장 최근 시작한 시즌으로 결정한다."""
     return db.execute(
-        select(Season).where(Season.status == SeasonStatus.ACTIVE)
+        select(Season).where(Season.status == SeasonStatus.ACTIVE, Season.hidden.is_(False))
         .order_by(Season.start_date.desc()).limit(1)
     ).scalar_one_or_none()
 ```
@@ -122,6 +127,37 @@ def get_open_season(db: Session) -> Season | None:
 >
 > **같은 상황에서도 "누가 보는 화면인가"에 따라 실패 전략이 달라진다.**
 > **내부 불변식은 시끄럽게, 공개 화면은 조용하게.**
+
+### 숨김 시즌 — 세 군데가 같은 규칙을 쓴다 (2026-10-01)
+
+**[쉬움]** 관리자가 지난 시즌이나 테스트 시즌을 방문자에게서 감출 수 있다. 관리자와 **그 시즌의 참가팀**에게는
+계속 보인다. 팀까지 막지 않는 이유는 비공개 리허설처럼 팀은 써야 하는 경우가 있어서다.
+
+**[전공] 목록에서 빼는 것만으로는 숨겨지지 않는다.** 리더보드 주소는 `/leaderboard/3`처럼 번호다.
+목록에서만 빼면 번호를 바꿔 넣어 그대로 열린다. 최고기록 영상(`/media/videos/{제출id}`)도 마찬가지다.
+그래서 판단을 `app/season_access.py`의 함수 하나로 모으고, 네 군데가 모두 그것을 부른다:
+
+```python
+def can_view_season(season, team, admin) -> bool:
+    if not season.hidden:
+        return True
+    if admin is not None:
+        return True
+    return team is not None and team.season_id == season.id
+```
+
+| 어디 | 숨김 시즌을 볼 수 없는 사람에게 |
+|---|---|
+| `render_season_list` | 목록에서 뺀다 |
+| `get_open_season` | `/leaderboard` 자동 진입 대상에서 뺀다(SQL `hidden IS FALSE`) |
+| `season_leaderboard` | **없는 시즌과 똑같이** `/leaderboard`로 리다이렉트한다 |
+| `media.can_view_video` | 최고기록 영상도 404 |
+
+리다이렉트를 없는 시즌과 똑같이 하는 이유: 응답이 다르면 "3번 시즌은 숨겨져 있다"는 사실이 드러난다.
+관리자 경로 은닉(3단계)과 같은 원리다.
+
+`get_open_season`만 SQL에서 거르고 나머지는 파이썬 함수를 쓴다. 자동 진입은 "공개된 진행중 시즌"이라는
+**방문자 기준 하나**만 있으면 되기 때문이다. 숨긴 시즌의 팀은 제출 화면의 "리더보드 보러가기" 링크로 들어간다.
 
 ### 라우트 순서 — 다시 한 번
 
@@ -322,7 +358,8 @@ def build_leaderboard(db: Session, season: Season):
         total_submissions = sum(1 for s in team.submissions if s.status == SubmissionStatus.DONE)
 
         if best_result is not None:
-            video_url = f"/media/videos/{best_result.video_path}" if best_result.video_path else None
+            # 파일 경로가 아니라 제출 id로 연결한다 — 권한 확인 라우트가 받는 형식 (app/routers/media.py).
+            video_url = f"/media/videos/{best_submission.id}" if best_result.video_path else None
             ranked.append({
                 "team": team,
                 "lap_time": best_result.lap_time_seconds,
@@ -434,22 +471,37 @@ total_submissions = sum(1 for s in team.submissions if s.status == SubmissionSta
 ### 4-6. `video_url` 조립
 
 ```python
-video_url = f"/media/videos/{best_result.video_path}" if best_result.video_path else None
+video_url = f"/media/videos/{best_submission.id}" if best_result.video_path else None
 ```
 
-`video_path`는 상대 경로: `"1/6/17.mp4"` → `/media/videos/1/6/17.mp4`
-→ `main.py`의 `app.mount("/media/videos", StaticFiles(...))`가 처리
+URL에는 **제출 id만** 들어간다(예: `/media/videos/17`). `video_path`(예: `"1/6/17.mp4"`)는
+"영상이 있는가"를 판단하는 데만 쓰고, URL에는 넣지 않는다.
+→ `app/routers/media.py`의 `get_video`가 권한을 확인하고 파일을 내준다.
 
-**`video_path`가 `None`일 수 있는 세 경우:**
+**[쉬움] 왜 예전처럼 파일 경로를 그대로 쓰지 않나?**
+예전에는 `/media/videos/1/6/17.mp4`처럼 파일 위치를 그대로 URL로 썼다. 그때는 폴더에 남는 영상이
+팀별 최고기록뿐이라 누가 봐도 괜찮았다. 이제는 참가자가 탈선 위치를 볼 수 있도록
+**직전 제출 영상도 남긴다.** 이 영상은 그 팀만 봐야 한다. 그런데 파일 경로를 그대로 공개하면
+숫자만 바꿔서 다른 팀 영상을 열 수 있다.
+
+**[전공]** StaticFiles mount는 요청자가 누구인지 모른다. 그래서 권한 확인을 라우트 함수 안으로 옮겼다.
+판정 규칙은 `can_view_video` 하나에 있다. 그 제출이 소속 팀의 **현재** 최고기록(`get_team_best`)이면
+공개하고, 아니면 세션의 팀이 그 제출을 가진 팀일 때만 보여준다.
+"현재"라는 점이 중요하다. 팀이 기록을 갱신하면 예전 최고기록 영상은 비공개로 바뀌고,
+보존 정책에 따라 곧 지워진다.
+
+**`video_path`가 `None`일 수 있는 세 경우:** (이때는 링크 대신 `—`)
 1. 워커가 쓸 만한 영상 앵글을 못 찾음 (`drfc.download_video`가 `None`)
 2. **워커가 영상을 웹에 못 올림** (`transfer.deliver_video`가 `None` — http 모드)
 3. **보존 정책으로 파일을 지우면서 경로를 비웠다**
 ```python
-# app/retention.py:47-48
-if _remove(videos_dir / result.video_path):
-    removed += 1
-result.video_path = None      # ← 파일을 지웠으니 경로도 비운다
+# app/retention.py:54-57
+if not keep_video and result is not None and result.video_path:
+    if _remove(videos_dir / result.video_path):
+        removed += 1
+    result.video_path = None      # ← 파일을 지웠으니 경로도 비운다
 ```
+(`keep_video=True`는 직전 제출 영상을 남길 때다 — 6단계 §보존 정책 참고)
 
 **파일은 지웠는데 경로만 남으면 깨진 링크**가 된다. `retention.py` 주석이 지적한다:
 > 영상은 지운 뒤 `video_path`를 비운다 — 파일이 없는데 경로만 남으면 나중에 깨진 링크가 된다.
@@ -770,10 +822,10 @@ return " · ".join(parts)          # 평범한 str 반환
 
 **`href="{{ row.video_url }}"` 는 위험한가?**
 ```python
-video_url = f"/media/videos/{best_result.video_path}"
-video_rel_path = f"{season_id}/{team_id}/{submission.id}.mp4"
+video_url = f"/media/videos/{best_submission.id}"
 ```
-**전부 DB의 정수 ID로 조립된다. 사용자 입력이 안 들어간다.** → 안전하다.
+**DB의 정수 ID 하나로 조립된다. 사용자 입력이 안 들어간다.** → 안전하다.
+(예전에는 `video_path` 문자열을 끼워 넣었다. 지금은 경로 문자열 자체가 URL에 나오지 않는다.)
 
 **`action="{{ admin_login_path }}"` 는?**
 `.env`에서 오고 `field_validator`가 정규화한다(1단계 §3-5).

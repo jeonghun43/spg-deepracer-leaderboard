@@ -678,7 +678,11 @@ a1c4f2b8d907  daily_count_override → daily_count_adjustment  (컬럼 이름 �
      ↓
 c3e7a91b45d2  worker_heartbeats                              (테이블 추가)
      ↓
-d4f1a2c86b73  best_progress_percent, failure_reason          (컬럼 추가)   ← head
+d4f1a2c86b73  best_progress_percent, failure_reason          (컬럼 추가)
+     ↓
+e8b2c5d17f40  seasons.uploads_paused 외 2개                  (컬럼 추가, NOT NULL + server_default)
+     ↓
+f3a9d6e21c58  seasons.hidden                                (컬럼 추가, NOT NULL + server_default)   ← head
 ```
 
 ### 왜(Why) — `Base.metadata.create_all()` 로 하면 안 되나?
@@ -686,7 +690,7 @@ d4f1a2c86b73  best_progress_percent, failure_reason          (컬럼 추가)   �
 `create_all()`은 **없는 테이블을 만들기만 한다.** 컬럼 추가·이름 변경·데이터 변환을 못 한다.
 **운영 중인 DB에는 데이터가 들어있다.** 지우고 다시 만들 수 없다.
 
-### 어떻게(How) — 마이그레이션 4개가 각각 다른 것을 가르쳐준다
+### 어떻게(How) — 마이그레이션 6개가 각각 다른 것을 가르쳐준다
 
 #### #1 `685df3cb9303` — autogenerate로 만든 초기 스키마
 
@@ -789,6 +793,31 @@ docstring:
 (PG 11+에서 상수 default는 개선됐지만, 습관은 여전히 nullable 우선이 안전하다.)
 
 **우리 규모에선 상관없지만 습관이 중요하다.**
+
+#### #5 `e8b2c5d17f40` — **NOT NULL 컬럼을 `server_default`로 추가**
+
+```python
+op.add_column(
+    "seasons",
+    sa.Column("uploads_paused", sa.Boolean(), nullable=False, server_default=sa.false()),
+)
+op.add_column("seasons", sa.Column("uploads_paused_message", sa.String(length=500), nullable=True))
+op.add_column("seasons", sa.Column("uploads_paused_at", sa.DateTime(timezone=True), nullable=True))
+```
+
+긴급 패치용 **업로드 일시 중지** 스위치다. 지난 대회 온라인 주행 기간에 평가 서버를 급히 고친 적이
+있는데, 그동안 참가자 업로드를 막을 방법이 없었다. 시즌 `status`로 막을 수는 없다.
+진행중 → 마감 → 아카이브로 **한 방향으로만** 바뀌어서, 막으려고 바꾸면 대회가 끝나 버린다.
+그래서 되돌릴 수 있는 별도 플래그를 뒀다.
+
+#4와 달리 `uploads_paused`는 **NOT NULL**이다. "중지인지 아닌지 모름"이라는 상태는 의미가 없다.
+그래서 아래에서 말하는 `server_default` 방식을 썼다. 기존 시즌 행은 `false`(업로드 허용)로 채워지고,
+옛 코드는 이 컬럼을 모르므로 t=1 구간(아래)에서도 안전하다.
+
+#### #6 `f3a9d6e21c58` — `seasons.hidden` (#5와 같은 방식)
+
+방문자에게 시즌을 숨기는 플래그다(5단계 "숨김 시즌"). #5와 같은 이유로 NOT NULL + `server_default=false`다.
+기존 시즌은 모두 공개 상태로 채워진다.
 
 ### **컬럼 추가가 "안전한" 진짜 이유 — 배포 순서**
 
@@ -968,7 +997,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests/test_worker_status.py -v
 
 **실험 E — 마이그레이션 왕복**
 ```bash
-alembic current          # 지금 리비전 (d4f1a2c86b73 여야 한다)
+alembic current          # 지금 리비전 (f3a9d6e21c58 여야 한다)
 alembic history          # 체인 확인
 alembic downgrade -1     # 한 칸 되돌리기
 alembic current

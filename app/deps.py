@@ -23,6 +23,17 @@ def get_current_team_optional(request: Request, db: Session = Depends(get_db)) -
     return db.get(Team, team_id)
 
 
+def get_current_admin_optional(request: Request, db: Session = Depends(get_db)) -> AdminAccount | None:
+    """관리자면 계정을, 아니면 None을 돌려준다. 공개 화면에서 "관리자에게만 더 보여줄 것"을 고를 때 쓴다.
+
+    `get_current_admin`과 달리 404를 던지지 않는다 — 공개 화면은 방문자도 정상적으로 열려야 한다.
+    """
+    admin_id = request.session.get("admin_id")
+    if not admin_id:
+        return None
+    return db.get(AdminAccount, admin_id)
+
+
 def get_current_admin(request: Request, db: Session = Depends(get_db)) -> AdminAccount:
     """미인증이면 404를 돌려준다 — 리다이렉트가 아니다 (admin-access-hardening.md §3.2).
 

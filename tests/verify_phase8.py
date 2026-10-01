@@ -229,7 +229,8 @@ team_c_id = team_id_by_name(season_id, "검증팀C")
 status, _, body = admin.get(f"/admin/seasons/{season_id}")
 check("시즌 상세에 한글 팀명 정상 표시", "검증팀A" in body, "팀명이 화면에 없음")
 
-admin.post(f"/admin/seasons/{season_id}/advance-status", {})
+# 상태 전환은 "어느 상태에서 어느 상태로"를 함께 보낸다 — 같은 요청이 두 번 가도 한 칸만 간다 (plan.md §5.7)
+admin.post(f"/admin/seasons/{season_id}/status", {"from_status": "preparing", "to_status": "active"})
 db = SessionLocal()
 season_status = db.get(Season, season_id).status
 db.close()
@@ -418,8 +419,8 @@ for path in (best_video, old_video):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"fake mp4")
 
-admin.post(f"/admin/seasons/{season_id}/advance-status", {})  # active → closed
-admin.post(f"/admin/seasons/{season_id}/advance-status", {})  # closed → archived
+admin.post(f"/admin/seasons/{season_id}/status", {"from_status": "active", "to_status": "closed"})
+admin.post(f"/admin/seasons/{season_id}/status", {"from_status": "closed", "to_status": "archived"})
 
 db = SessionLocal()
 try:
@@ -437,7 +438,8 @@ check("아카이브 후에도 리더보드 조회 가능", status == 200 and "88
 check("최고기록 영상 파일 보존", best_video.exists(), f"{best_video} 없음")
 check("최고기록 아닌 영상은 정리됨", not old_video.exists(), f"{old_video}가 남아있음")
 
-status, _, media = public.get(f"/media/videos/{season_id}/{team_a_id}/{sub2}.mp4")
+# 영상 URL은 파일 경로가 아니라 제출 id다 (app/routers/media.py). 최고기록 영상이라 비로그인도 받는다.
+status, _, media = public.get(f"/media/videos/{sub2}")
 check("아카이브 후 영상 URL 접근 가능", status == 200, f"status={status}")
 
 relogin = Client()
