@@ -1145,7 +1145,7 @@ if form_token != request.session.get("csrf"):
     raise HTTPException(403)
 ```
 
-> **판단**: 상태 변경 라우트(`advance-status`, `disqualify`, `daily-count`,
+> **판단**: 상태 변경 라우트(`seasons/{id}/status`, `visibility`, `uploads-pause`, `disqualify`, `daily-count`,
 > `reissue-password`, `teams/new`)는 붙일 가치가 있다.
 > **은닉과 잠금까지 갖춘 시스템에서 CSRF만 비어 있는 것은 균형이 안 맞는다.**
 

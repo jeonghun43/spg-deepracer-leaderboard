@@ -13,6 +13,8 @@
       <td>
         <a href="/leaderboard/{{ season.id }}">{{ season.name }}</a>
         {% if season.status.value == 'active' %} <span class="badge">현재 진행중</span>{% endif %}
+        {# 숨김 시즌은 관리자·그 시즌 팀에게만 목록에 나온다 (app/season_access.py) #}
+        {% if season.hidden %} <span class="badge status-hidden">숨김</span>{% endif %}
       </td>
       <td>{{ season.track_name }}</td>
       <td>{{ season.start_date }} ~ {{ season.end_date }}</td>

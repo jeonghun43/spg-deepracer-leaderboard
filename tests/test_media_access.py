@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.db import get_db
-from app.deps import get_current_team_optional
+from app.deps import get_current_admin_optional, get_current_team_optional
 from app.main import app
 from app.models import FinishStatus, SubmissionStatus
 
@@ -32,8 +32,8 @@ class FakeDB:
         return self._by_id.get(key)
 
 
-def make_team(team_id):
-    return types.SimpleNamespace(id=team_id, submissions=[])
+def make_team(team_id, season):
+    return types.SimpleNamespace(id=team_id, season_id=season.id, season=season, submissions=[])
 
 
 def add_submission(storage, team, sub_id, lap_time, minutes=0, with_file=True):
@@ -66,17 +66,19 @@ def world(tmp_path, monkeypatch):
     (storage / "videos").mkdir(parents=True)
     monkeypatch.setattr(settings, "storage_dir", storage)
 
-    team_a, team_b = make_team(1), make_team(2)
+    season = types.SimpleNamespace(id=1, hidden=False)
+    team_a, team_b = make_team(1, season), make_team(2, season)
     best = add_submission(storage, team_a, 1, lap_time=90.0)
     latest = add_submission(storage, team_a, 2, lap_time=None, minutes=10)
     db = FakeDB([best, latest])
 
-    viewer = {"team": None}
+    viewer = {"team": None, "admin": None}
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_team_optional] = lambda: viewer["team"]
+    app.dependency_overrides[get_current_admin_optional] = lambda: viewer["admin"]
     yield types.SimpleNamespace(
         client=TestClient(app), viewer=viewer, team_a=team_a, team_b=team_b,
-        best=best, latest=latest, storage=storage, db=db,
+        best=best, latest=latest, storage=storage, db=db, season=season,
     )
     app.dependency_overrides.clear()
 
@@ -129,3 +131,41 @@ def test_range_request_is_supported(world):
 def test_old_static_file_path_is_gone(world):
     """예전 StaticFiles 경로(파일 경로 그대로)로는 더 이상 받을 수 없다."""
     assert world.client.get(f"/media/videos/{world.latest.result.video_path}").status_code == 404
+
+
+# ── 숨김 시즌 (plan.md §5.7) ─────────────────────────────────────────────
+#
+# 리더보드만 막고 영상 주소를 열어 두면 번호만 바꿔 넣어 볼 수 있다. 같은 규칙(season_access)을 따른다.
+
+
+def test_hidden_season_best_video_is_not_public(world):
+    world.season.hidden = True
+    assert world.client.get(f"/media/videos/{world.best.id}").status_code == 404
+
+
+def test_hidden_season_best_video_visible_to_same_season_team(world):
+    """같은 시즌의 다른 팀은 리더보드를 보므로 최고기록 영상도 본다."""
+    world.season.hidden = True
+    world.viewer["team"] = world.team_b
+    assert world.client.get(f"/media/videos/{world.best.id}").status_code == 200
+
+
+def test_hidden_season_team_from_other_season_cannot_view(world):
+    world.season.hidden = True
+    other_season = types.SimpleNamespace(id=2, hidden=False)
+    world.viewer["team"] = make_team(9, other_season)
+    assert world.client.get(f"/media/videos/{world.best.id}").status_code == 404
+
+
+def test_admin_can_view_any_video(world):
+    """관리자는 숨김 시즌 리더보드의 "보기"와 직전 제출 영상까지 열 수 있어야 한다."""
+    world.season.hidden = True
+    world.viewer["admin"] = types.SimpleNamespace(id=1)
+    assert world.client.get(f"/media/videos/{world.best.id}").status_code == 200
+    assert world.client.get(f"/media/videos/{world.latest.id}").status_code == 200
+
+
+def test_latest_video_still_private_from_same_season_team(world):
+    """숨김과 상관없이 직전 제출 영상은 소유 팀만 본다."""
+    world.viewer["team"] = world.team_b
+    assert world.client.get(f"/media/videos/{world.latest.id}").status_code == 404

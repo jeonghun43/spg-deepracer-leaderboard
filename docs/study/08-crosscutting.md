@@ -364,6 +364,7 @@ assert 관리자.json() == 아무거나.json()      # ← 본문까지
 |---|---|
 | `get_team_best` | 리더보드 표시 + 파일 보존 정책 + 영상 공개 판정(`media.py`) |
 | `get_latest_done_submission` | 파일 보존 정책(직전 영상 남김) + 제출 화면(직전 영상 카드) |
+| `can_view_season` | 시즌 목록 + 리더보드 + 평가 영상 (숨김 시즌) |
 | `prune_team_files` | 워커(local) + 서버(`internal.py`) + 시즌 아카이브(`keep_latest_video=False`) |
 | `ACTIVE_SUBMISSION_STATUSES` | `quota.py`(SQL) + `retention.py`(파이썬) |
 | `settings.daily_submission_limit` | 검증 + 화면 표시 + 에러 메시지 |
@@ -542,7 +543,7 @@ def uses_http() -> bool:
 
 ## 8. 테스트 — 무엇을 테스트했고 무엇을 안 했나
 
-### 현재 테스트 목록 (18개 + 검증 스크립트)
+### 현재 테스트 목록 (20개 + 검증 스크립트)
 
 ```
 tests/test_admin_access.py           — 은닉·잠금·네비게이션 (16개 케이스)
@@ -556,6 +557,8 @@ tests/test_progress_summary.py       — summarize_progress / 로그 파싱 / �
 tests/test_quota_adjustment.py       — 하루 한도 보정
 tests/test_quota_day_boundary.py     — 하루 경계 (제출 시각 기준)
 tests/test_retention.py              — 파일 보존 정책 (직전 제출 영상 보존 포함)
+tests/test_season_status.py          — 시즌 상태 전환 (이중 요청 방어·되돌리기·숨김 토글)
+tests/test_season_visibility.py      — 숨김 시즌 (목록·자동 진입·리더보드)
 tests/test_storage_paths.py          — 경로 해석
 tests/test_team_name_parsing.py      — parse_team_names
 tests/test_upload_pause.py           — 업로드 일시 중지 (서버 거절·관리자 토글)

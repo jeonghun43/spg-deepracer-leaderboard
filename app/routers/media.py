@@ -14,17 +14,29 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.deps import get_current_team_optional
-from app.models import Submission, Team
+from app.deps import get_current_admin_optional, get_current_team_optional
+from app.models import AdminAccount, Submission, Team
 from app.records import get_team_best
+from app.season_access import can_view_season
 
 router = APIRouter(tags=["media"])
 
 
-def can_view_video(submission: Submission, viewer: Team | None) -> bool:
-    """이 제출의 영상을 볼 수 있는가. 최고기록이면 공개, 아니면 소유 팀만."""
+def can_view_video(
+    submission: Submission, viewer: Team | None, admin: AdminAccount | None = None
+) -> bool:
+    """이 제출의 영상을 볼 수 있는가.
+
+    - 관리자와 소유 팀은 항상 본다. 관리자가 숨김 시즌 리더보드에서 "보기"를 누를 수 있어야 한다.
+    - 그 외에는 **최고기록이고, 그 시즌을 볼 수 있을 때만** 본다. 숨김 시즌의 최고기록 영상은
+      리더보드처럼 방문자에게서 감춘다 (app/season_access.py).
+    """
+    if admin is not None:
+        return True
     if viewer is not None and viewer.id == submission.team_id:
         return True
+    if not can_view_season(submission.team.season, viewer, None):
+        return False
     best_submission, _ = get_team_best(submission.team)
     return best_submission is not None and best_submission.id == submission.id
 
@@ -33,6 +45,7 @@ def can_view_video(submission: Submission, viewer: Team | None) -> bool:
 def get_video(
     submission_id: int,
     viewer: Team | None = Depends(get_current_team_optional),
+    admin: AdminAccount | None = Depends(get_current_admin_optional),
     db: Session = Depends(get_db),
 ):
     # 권한이 없을 때도 "없음"과 똑같이 404를 준다 — 403이면 그 제출에 영상이 있다는 사실이 드러난다.
@@ -41,7 +54,7 @@ def get_video(
     submission = db.get(Submission, submission_id)
     if submission is None or submission.result is None or not submission.result.video_path:
         raise not_found
-    if not can_view_video(submission, viewer):
+    if not can_view_video(submission, viewer, admin):
         raise not_found
 
     videos_dir = settings.videos_dir.resolve()

@@ -95,3 +95,6 @@ video { max-width: 100%; border-radius: 6px; }
   border-radius: 6px; padding: 10px 14px; margin: 0 0 14px;
 }
 .badge.status-paused { background: #3a3320; color: #e8c86b; }
+/* 되돌리기 어려운 조작(시즌 상태 변경)을 모아 두는 영역. 팀 등록 폼과 팀 표 사이에 둔다 (plan.md §5.7) */
+.card.danger-zone { border-color: #a6323a; margin-top: 2rem; }
+.badge.status-hidden { background: #33394a; color: #cfd8e3; }

@@ -1113,7 +1113,7 @@ if progress is not None:
       - Depends(get_db) → SessionLocal() → Session 객체
 
  6. leaderboard_entry(request, db) 실행
-      → get_open_season(db) → SELECT * FROM seasons WHERE status='active' ...
+      → get_open_season(db) → SELECT * FROM seasons WHERE status='active' AND hidden IS false ...
       → 있으면 RedirectResponse("/leaderboard/1", 303)
 
  7. Response → ASGI send 이벤트

@@ -56,22 +56,27 @@ def index():
 
 
 @router.get("/leaderboard")
-def leaderboard_entry(request: Request, db: Session = Depends(get_db)):
+def leaderboard_entry(request, db, team=Depends(get_current_team_optional),
+                      admin=Depends(get_current_admin_optional)):
     open_season = get_open_season(db)
     if open_season is not None:
         return RedirectResponse(f"/leaderboard/{open_season.id}", status_code=303)
-    return render_season_list(request, db)
+    return render_season_list(request, db, team, admin)
 
 
 @router.get("/leaderboard/seasons")     # ← 순서 주의
-def season_list(request: Request, db: Session = Depends(get_db)):
-    return render_season_list(request, db)
+def season_list(request, db, team=..., admin=...):
+    return render_season_list(request, db, team, admin)
 
 
 @router.get("/leaderboard/{season_id}")
-def season_leaderboard(season_id: int, request: Request, db: Session = Depends(get_db)):
+def season_leaderboard(season_id: int, request, db, team=..., admin=...):
+    season = db.get(Season, season_id)
+    if season is None or not can_view_season(season, team, admin):
+        return RedirectResponse("/leaderboard", status_code=303)
     ...
 ```
+(`team`·`admin`은 2026-10-01 시즌 숨김 기능 때 붙었다 — 아래 "숨김 시즌" 절)
 
 ### 흐름
 
@@ -107,7 +112,7 @@ def get_open_season(db: Session) -> Season | None:
     """지금 열려있는(진행중) 시즌. 운영상 한 번에 하나지만, 실수로 둘이 되어도
     화면이 흔들리지 않도록 가장 최근 시작한 시즌으로 결정한다."""
     return db.execute(
-        select(Season).where(Season.status == SeasonStatus.ACTIVE)
+        select(Season).where(Season.status == SeasonStatus.ACTIVE, Season.hidden.is_(False))
         .order_by(Season.start_date.desc()).limit(1)
     ).scalar_one_or_none()
 ```
@@ -122,6 +127,37 @@ def get_open_season(db: Session) -> Season | None:
 >
 > **같은 상황에서도 "누가 보는 화면인가"에 따라 실패 전략이 달라진다.**
 > **내부 불변식은 시끄럽게, 공개 화면은 조용하게.**
+
+### 숨김 시즌 — 세 군데가 같은 규칙을 쓴다 (2026-10-01)
+
+**[쉬움]** 관리자가 지난 시즌이나 테스트 시즌을 방문자에게서 감출 수 있다. 관리자와 **그 시즌의 참가팀**에게는
+계속 보인다. 팀까지 막지 않는 이유는 비공개 리허설처럼 팀은 써야 하는 경우가 있어서다.
+
+**[전공] 목록에서 빼는 것만으로는 숨겨지지 않는다.** 리더보드 주소는 `/leaderboard/3`처럼 번호다.
+목록에서만 빼면 번호를 바꿔 넣어 그대로 열린다. 최고기록 영상(`/media/videos/{제출id}`)도 마찬가지다.
+그래서 판단을 `app/season_access.py`의 함수 하나로 모으고, 네 군데가 모두 그것을 부른다:
+
+```python
+def can_view_season(season, team, admin) -> bool:
+    if not season.hidden:
+        return True
+    if admin is not None:
+        return True
+    return team is not None and team.season_id == season.id
+```
+
+| 어디 | 숨김 시즌을 볼 수 없는 사람에게 |
+|---|---|
+| `render_season_list` | 목록에서 뺀다 |
+| `get_open_season` | `/leaderboard` 자동 진입 대상에서 뺀다(SQL `hidden IS FALSE`) |
+| `season_leaderboard` | **없는 시즌과 똑같이** `/leaderboard`로 리다이렉트한다 |
+| `media.can_view_video` | 최고기록 영상도 404 |
+
+리다이렉트를 없는 시즌과 똑같이 하는 이유: 응답이 다르면 "3번 시즌은 숨겨져 있다"는 사실이 드러난다.
+관리자 경로 은닉(3단계)과 같은 원리다.
+
+`get_open_season`만 SQL에서 거르고 나머지는 파이썬 함수를 쓴다. 자동 진입은 "공개된 진행중 시즌"이라는
+**방문자 기준 하나**만 있으면 되기 때문이다. 숨긴 시즌의 팀은 제출 화면의 "리더보드 보러가기" 링크로 들어간다.
 
 ### 라우트 순서 — 다시 한 번
 

@@ -3,6 +3,9 @@
 {% block content %}
 <h1>{{ season.name }} 리더보드</h1>
 <p class="muted">트랙: {{ season.track_name }} · <a href="/leaderboard/seasons">← 다른 시즌 보기</a></p>
+{% if season.hidden %}
+<p class="notice" role="status"><strong>숨김 시즌</strong> — 일반 방문자에게는 보이지 않습니다. 관리자와 이 시즌의 참가팀만 볼 수 있습니다.</p>
+{% endif %}
 
 {% include "_worker_status.html" %}
 

@@ -11,7 +11,8 @@
       <td><a href="/admin/seasons/{{ season.id }}">{{ season.name }}</a></td>
       <td>{{ season.track_name }}</td>
       <td>{{ season.start_date }} ~ {{ season.end_date }}</td>
-      <td><span class="badge">{{ season.status.value }}</span></td>
+      <td><span class="badge">{{ season.status.value }}</span>
+        {% if season.hidden %}<span class="badge status-hidden">숨김</span>{% endif %}</td>
     </tr>
     {% else %}
     <tr><td colspan="4" class="muted">등록된 시즌이 없습니다.</td></tr>

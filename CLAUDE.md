@@ -108,5 +108,17 @@
 - **테스트를 돌려서 확인한다.** 저장소의 `.venv`는 WSL(ELF)이라 Windows에서 실행되지 않는다.
   스크래치패드에 임시 venv를 만들어 `requirements.txt`를 설치해 돌린다
   (Windows에서는 `tzdata`도 추가로 필요하다 — 프로젝트 의존성에는 넣지 않는다).
+  - 스크래치 venv로 Git Bash에서 돌릴 때 함정이 둘 있다(2026-10-01 실제로 겪음):
+    - **`MSYS_NO_PATHCONV=1`을 붙인다.** 안 붙이면 `ADMIN_LOGIN_PATH=/admin/login` 같은 환경변수를
+      Git Bash가 `C:/Program Files/Git/admin/login`으로 바꿔 버려 관리자 라우트가 엉뚱한 경로에 붙는다.
+    - **화면 확인용으로 export한 환경변수(`ADMIN_LOGIN_PATH`, `DATABASE_URL` 등)를 지운 셸에서 pytest를 돌린다.**
+      남아 있으면 `test_admin_access.py`가 실패한다(그 테스트는 비밀 경로가 설정된 상태를 전제로 한다).
+- **파일을 고칠 때 줄바꿈(LF/CRLF)을 바꾸지 않는다.** 저장소에 LF 파일과 CRLF 파일이 섞여 있다.
+  Windows에서 Python `Path.write_text()`나 `open(..., "w")`로 쓰면 **LF 파일이 CRLF로 통째로 바뀌어**
+  diff가 파일 전체가 된다. 2026-10-01에 24개 파일에서 실제로 일어났다. 파이썬으로 고칠 때는
+  `open(p, encoding="utf-8", newline="")`로 읽고 써서 원래 줄바꿈을 유지하고, 끝나면 HEAD와 줄바꿈을 비교한다.
+- **화면까지 확인할 때는 로컬 데모 데이터를 쓴다.** 로컬에는 평가 워커가 없어 제출이 끝나지 않는다.
+  `scripts/dev_seed_video_demo.py`가 평가가 끝난 상태(최고기록·직전 제출 영상, 탈선 횟수, 데모 팀 2개,
+  관리자)를 DB에 넣는다. 사용법은 그 파일 머리말에 있다. 운영 환경(`ADMIN_LOGIN_PATH` 설정됨)에서는 스스로 멈춘다.
 - **문서는 "왜"를 남긴다.** 이 저장소의 문서는 결론만이 아니라 **그 선택을 한 이유와 실제로
   겪은 사고**를 적는 형식이다. 고칠 때도 그 형식을 지킨다.

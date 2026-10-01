@@ -229,7 +229,8 @@ team_c_id = team_id_by_name(season_id, "검증팀C")
 status, _, body = admin.get(f"/admin/seasons/{season_id}")
 check("시즌 상세에 한글 팀명 정상 표시", "검증팀A" in body, "팀명이 화면에 없음")
 
-admin.post(f"/admin/seasons/{season_id}/advance-status", {})
+# 상태 전환은 "어느 상태에서 어느 상태로"를 함께 보낸다 — 같은 요청이 두 번 가도 한 칸만 간다 (plan.md §5.7)
+admin.post(f"/admin/seasons/{season_id}/status", {"from_status": "preparing", "to_status": "active"})
 db = SessionLocal()
 season_status = db.get(Season, season_id).status
 db.close()
@@ -418,8 +419,8 @@ for path in (best_video, old_video):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"fake mp4")
 
-admin.post(f"/admin/seasons/{season_id}/advance-status", {})  # active → closed
-admin.post(f"/admin/seasons/{season_id}/advance-status", {})  # closed → archived
+admin.post(f"/admin/seasons/{season_id}/status", {"from_status": "active", "to_status": "closed"})
+admin.post(f"/admin/seasons/{season_id}/status", {"from_status": "closed", "to_status": "archived"})
 
 db = SessionLocal()
 try:

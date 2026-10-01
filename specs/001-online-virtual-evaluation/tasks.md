@@ -471,6 +471,76 @@ Phase 3과 4는 Phase 2 완료 후 병렬 진행 가능. Phase 5는 Phase 4(큐/
 
 ---
 
+## Phase 15 — 직전 제출 영상·트랙 이탈 횟수, 긴급 업로드 일시 중지 (2026-10-01)
+
+> 참가자는 최고기록 영상만 볼 수 있었다. 완주 못 한 제출의 영상은 업로드 몇 초 뒤 지워져서, **어디서**
+> 탈선하는지 알 수 없었다. 또 지난 대회 중 평가 서버를 급히 고칠 때 업로드를 막을 수단이 없었다.
+> 설계: [plan.md](plan.md) §5.5·§5.6
+
+- [x] **T134** `app/retention.py`·`app/records.py`: 직전 완료 제출(`get_latest_done_submission`)의 **영상은 남기고 모델만** 지운다. 시즌 아카이브는 `keep_latest_video=False`로 최고기록만 남긴다
+- [x] **T135** `app/routers/media.py` 신규: `/media/videos` StaticFiles 공개 마운트를 권한 확인 라우트(`/media/videos/{제출id}`)로 교체한다. 최고기록은 공개, 그 외는 소유 팀만 보고 나머지는 404. 경로 이탈 방지, Range 지원(`FileResponse`). 리더보드 링크도 제출 id 형식으로 바꾼다
+- [x] **T136** 제출 화면 "직전 평가 주행 영상" 카드: 영상, 결과, 트랙 이탈 N회. 새 제출이 평가 중이면 이전 완료분을 보여 준다
+- [x] **T137** `worker/drfc.py` `count_off_track_from_log`: metrics가 빈 제출의 이탈 횟수를 로그의 `off_track` 스텝 수로 센다. 저장된 로그 17·21·23번으로 metrics 합과 일치하는 것을 확인했다
+- [x] **T138** `seasons.uploads_paused`(+ 공지 문구·시각), 마이그레이션 `e8b2c5d17f40`, 관리자 토글(`/admin/seasons/{id}/uploads-pause`), 제출 화면 공지·폼 숨김, `POST /submit` 서버 거절. 오류 메시지 리다이렉트를 URL 인코딩한다(공지에 `&`가 있으면 잘리던 문제)
+- [x] **T139** pytest: `test_media_access.py`, `test_upload_pause.py` 신규, `test_retention.py`·`test_progress_summary.py`·`test_leaderboard_build.py` 보강. 문서(study 01·02·04·05·06·08, handover, operations, 참가자 03) 갱신
+- [ ] **T140** 평가 서버(EC2) `git pull` 반영 — **다음 대회 시작 때** (웹 서버는 2026-10-01 배포 완료). EC2는 대회가 끝나 중지해 둔 상태다.
+  - ⚠️ **먼저 `git branch --show-current`로 EC2 체크아웃 브랜치를 확인한다.** 어느 브랜치를 쓰는지 문서에 없다. 커밋은 `develop`에 푸시하고 있으므로, `main`이면 `git pull`로는 반영되지 않는다
+  - 웹이 새 버전이고 워커가 옛 버전이어도 동작한다(전송 API는 바뀌지 않았다). 반영 전까지는 한 바퀴도 못 돈 제출의 탈선 횟수만 예전처럼 0으로 저장된다
+- [ ] **T140a (운영)** 참가자 문서에 노출됐던 Docker Swarm 워커 토큰 무효화 — 그 로그가 찍힌 노트북에서 `docker swarm join-token --rotate worker`. 문서에서는 가렸지만 3.14 커밋 기록에 남아 있다(CLAUDE.md §4-1)
+
+### 15-1 검증 기록 (2026-10-01)
+
+- pytest 155개 통과. 데모 데이터(`scripts/dev_seed_video_demo.py`)를 넣은 로컬 앱에서 다음을 확인했다.
+  - 직전 영상: 비로그인·다른 팀은 404, 소유 팀은 200
+  - 업로드 중지: 공지 표시·폼 숨김·서버 거절·재개
+- 웹 서버 배포 후 마이그레이션 `e8b2c5d17f40` 적용과 리더보드 영상 주소 형식을 확인했다.
+- **같은 날 발견한 별건**: `scripts/backup.sh`의 덤프 검사가 `pipefail` + `head`의 SIGPIPE로 4주 동안 매번 실패하고 있었다(덤프 64KB 초과 시점부터). 검사 방식을 고쳤다 — [operations.md](../../docs/operations.md) 백업 절 참고.
+
+---
+
+## Phase 16 — 시즌 상태 전환 안전장치·시즌 숨김 (2026-10-01)
+
+> 상태 전환 버튼이 시즌 상세 맨 위, 대시보드에서 시즌을 클릭해 들어오는 위치에 있어서 한 번 더 눌리면
+> 넘어갔다. 서버는 요청마다 한 칸 전진하고 되돌릴 수 없었다. 전이 가드가 없다는 점은
+> [tagging.md](../../docs/study/tagging.md)가 지적한 바 있다. 또 모든 시즌이 공개 목록에 보였다.
+> 설계: [plan.md](plan.md) §5.7
+>
+> **원칙**: 되돌릴 수 없는 것(아카이브)만 되돌릴 수 없게 둔다. 숨김은 방문자에게만 적용하고, 참가팀의 사용은 막지 않는다.
+
+- [x] **T141** `app/routers/admin.py`: `PREV_STATUS`(진행중→준비중, 마감→진행중)를 추가한다. `advance-status`를 `POST /admin/seasons/{id}/status`(`from_status`, `to_status`)로 바꾼다. 현재 상태가 `from_status`와 다르면 무변경, 인접 상태만 허용, 아카이브는 되돌리기 불가
+- [x] **T142** `admin/season_detail.html`: 상단에는 상태 배지만 남긴다. 전환·되돌리기 버튼은 "위험 구역" 카드로 옮겨 **팀 등록 폼과 팀 표 사이**에 둔다(`confirm()` 유지, 아카이브 경고 유지). 처음엔 맨 끝에 뒀는데, 제출 표 100줄 아래라 너무 멀어서 옮겼다. `style.css`에 `.danger-zone`
+- [x] **T143** `Season.hidden` + 마이그레이션(`down_revision = e8b2c5d17f40`). 관리자 토글 `POST /admin/seasons/{id}/visibility`, 시즌 상세 "공개 여부" 카드, 대시보드 "숨김" 배지
+- [x] **T144** 공개 범위 판정: `deps.get_current_admin_optional`, `app/season_access.py`의 `can_view_season`(공개 시즌은 누구나, 숨김 시즌은 관리자·그 시즌 팀만). 리더보드·영상 두 라우터가 함께 쓰도록 별도 모듈에 둔다. 적용 위치:
+  - 시즌 목록(방문자에게서 제외)
+  - `get_open_season`(자동 진입에서 제외)
+  - `/leaderboard/{id}`(못 보면 없는 시즌처럼 리다이렉트, 볼 수 있는 사람에게는 숨김 안내)
+  - `media.can_view_video`(숨김 시즌 최고기록은 공개하지 않음, 관리자는 모든 영상)
+- [x] **T145 [P]** pytest: `test_season_status.py`·`test_season_visibility.py` 신규, `test_media_access.py` 보강, `verify_phase8.py`의 상태 전환 호출 갱신
+- [x] **T146 [P]** 문서: study 02(필드·마이그레이션)·05(숨김 필터)·03(라우트 이름)·tagging(전이 가드 해결), handover·operations 운영 절차
+- [x] **T147** 검증: 데모 데이터로 다음을 확인한다.
+  - 같은 폼을 두 번 보내도 한 칸만 이동
+  - 되돌리기 동작
+  - 숨김 후 비로그인에게는 목록·리더보드·영상이 안 보이고, 팀·관리자에게는 보임
+
+
+### 16-1 검증 기록 (2026-10-01)
+
+- pytest 182개 통과. 새로 추가한 테스트:
+  - `test_season_status.py`(12): 이중 전송, 되돌리기, 건너뛰기·아카이브 되돌리기 거부, 옛 라우트 제거, 숨김 토글, 미인증 404
+  - `test_season_visibility.py`(10): 메모리 SQLite로 `get_open_season` SQL 필터까지
+  - `test_media_access.py`에 숨김 시즌 5건
+- 데모 데이터(`scripts/dev_seed_video_demo.py`)를 넣은 앱에서 확인한 것:
+  - 위험 구역이 팀 등록 폼과 팀 표 사이에 있고, 그 위쪽에는 전환 버튼이 없다
+  - 같은 폼(진행중→마감)을 두 번 보내도 마감에서 멈춘다(예전 코드라면 아카이브까지 갔다)
+  - 마감 → 진행중 되돌리기가 된다
+  - 숨김 후 비로그인: 리더보드는 `/leaderboard`로 303, 목록에서 빠짐, 자동 진입 안 됨, 최고기록 영상 404
+  - 숨김 후 관리자·그 시즌 팀: 리더보드 200(숨김 안내 표시), 영상 200, 팀 제출 화면 정상
+  - 다시 공개하면 방문자도 200
+- 웹 서버 배포(2026-10-01, tar 전송 + `up -d --build`): 마이그레이션 `f3a9d6e21c58`이 추가됐다. 워커는 변경이 없다.
+- [ ] **T148** Phase 16 변경을 커밋·푸시한다(3.16). 웹 서버에는 tar로 올라갔지만 GitHub `develop`은 3.15에 멈춰 있다. 커밋 전에 CLAUDE.md §4-1 비밀값 검사를 한다
+
+---
+
 ## 범위 밖 (이번 STEP3에 포함하지 않음)
 
 - 002(오프라인 비전 타이머) 관련 작업 일체 — 온라인 서비스 구현 완료 후 별도로 STEP3 진행.

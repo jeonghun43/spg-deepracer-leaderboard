@@ -35,6 +35,12 @@ NEXT_STATUS: dict[SeasonStatus, SeasonStatus] = {
     SeasonStatus.ACTIVE: SeasonStatus.CLOSED,
     SeasonStatus.CLOSED: SeasonStatus.ARCHIVED,
 }
+# 한 단계 되돌리기 (plan.md §5.7). 실수로 마감·진행중으로 넘긴 것을 바로잡을 수 있어야 한다.
+# 아카이브는 없다 — 모델·영상 파일과 팀 계정이 이미 삭제돼 되돌릴 대상이 남아 있지 않다.
+PREV_STATUS: dict[SeasonStatus, SeasonStatus] = {
+    SeasonStatus.ACTIVE: SeasonStatus.PREPARING,
+    SeasonStatus.CLOSED: SeasonStatus.ACTIVE,
+}
 # 한 번에 등록할 수 있는 팀 수 상한. 실수로 큰 목록을 붙여넣는 것을 막기 위한 값이며,
 # 비밀번호 해시(bcrypt)가 팀당 수백 ms라 이 정도가 응답 시간 측면에서도 상한이다.
 MAX_BULK_TEAMS = 50
@@ -177,6 +183,7 @@ def render_season_detail(
             "daily_limit": settings.daily_submission_limit,
             "submissions": submissions,
             "next_status": NEXT_STATUS.get(season.status),
+            "prev_status": PREV_STATUS.get(season.status),
             "status_labels": STATUS_LABELS,
             "issued": issued or [],
             "issued_kind": issued_kind,
@@ -201,22 +208,43 @@ def season_detail(
     return render_season_detail(request, season, db)
 
 
-@router.post("/seasons/{season_id}/advance-status")
-def advance_status(
+def is_allowed_transition(current: SeasonStatus, to_status: SeasonStatus) -> bool:
+    """한 칸 앞(NEXT_STATUS) 또는 한 칸 뒤(PREV_STATUS)로만 갈 수 있다."""
+    return to_status in (NEXT_STATUS.get(current), PREV_STATUS.get(current))
+
+
+@router.post("/seasons/{season_id}/status")
+def change_status(
     season_id: int,
+    from_status: str = Form(...),
+    to_status: str = Form(...),
     admin: AdminAccount = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
+    """시즌 상태를 한 단계 전진하거나 되돌린다 (plan.md §5.7).
+
+    예전 `advance-status`는 "지금 상태가 무엇이든 한 칸 전진"이었다. 그래서 같은 요청이 두 번 가면
+    (더블클릭, 새로고침 재전송) 두 칸을 갔다 — 진행중에서 마감을 건너 아카이브까지 갈 수 있었다.
+    이제 폼이 **화면을 그릴 때의 상태(`from_status`)**를 함께 보낸다. 지금 상태가 그것과 다르면
+    이미 처리된 요청으로 보고 아무것도 하지 않는다.
+    """
+    redirect = RedirectResponse(f"/admin/seasons/{season_id}", status_code=303)
     season = db.get(Season, season_id)
     if season is None:
         return RedirectResponse("/admin", status_code=303)
-    next_status = NEXT_STATUS.get(season.status)
-    if next_status == SeasonStatus.ARCHIVED:
+    try:
+        expected, target = SeasonStatus(from_status), SeasonStatus(to_status)
+    except ValueError:
+        return redirect
+    if season.status != expected or not is_allowed_transition(expected, target):
+        return redirect
+
+    if target == SeasonStatus.ARCHIVED:
         archive_season(db, season, settings.videos_dir)
-    elif next_status is not None:
-        season.status = next_status
+    else:
+        season.status = target
         db.commit()
-    return RedirectResponse(f"/admin/seasons/{season_id}", status_code=303)
+    return redirect
 
 
 @router.post("/seasons/{season_id}/uploads-pause")
@@ -244,6 +272,23 @@ def set_uploads_paused(
         season.uploads_paused_message = None
         season.uploads_paused_at = None
     db.commit()
+    return RedirectResponse(f"/admin/seasons/{season_id}", status_code=303)
+
+
+@router.post("/seasons/{season_id}/visibility")
+def set_visibility(
+    season_id: int,
+    action: str = Form(...),
+    admin: AdminAccount = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """시즌을 방문자에게 숨기거나(hide) 다시 공개한다(show). 관리자·그 시즌 팀에게는 계속 보인다."""
+    season = db.get(Season, season_id)
+    if season is None:
+        return RedirectResponse("/admin", status_code=303)
+    if action in ("hide", "show"):
+        season.hidden = action == "hide"
+        db.commit()
     return RedirectResponse(f"/admin/seasons/{season_id}", status_code=303)
 
 

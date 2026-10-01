@@ -74,6 +74,10 @@ class Season(Base):
     uploads_paused_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     uploads_paused_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # 방문자에게 숨김 (plan.md §5.7). 관리자와 **이 시즌의 참가팀**은 계속 본다 — 지난 시즌·테스트 시즌을
+    # 공개 목록에서 치우거나, 비공개 리허설 대회를 돌리기 위한 것이라 팀의 로그인·제출은 막지 않는다.
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
     teams: Mapped[list["Team"]] = relationship(back_populates="season", cascade="all, delete-orphan")
 
 
