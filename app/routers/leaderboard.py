@@ -47,7 +47,8 @@ def build_leaderboard(db: Session, season: Season):
         total_submissions = sum(1 for s in team.submissions if s.status == SubmissionStatus.DONE)
 
         if best_result is not None:
-            video_url = f"/media/videos/{best_result.video_path}" if best_result.video_path else None
+            # 파일 경로가 아니라 제출 id로 연결한다 — 권한 확인 라우트가 받는 형식 (app/routers/media.py).
+            video_url = f"/media/videos/{best_submission.id}" if best_result.video_path else None
             ranked.append(
                 {
                     "team": team,

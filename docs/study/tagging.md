@@ -155,11 +155,13 @@ submission.status = SubmissionStatus.ERROR   # submission이 None이면 Attribut
 ### 6. 재큐에 시도 횟수 상한이 없다 — head-of-line blocking · [worker/run.py:254-265](worker/run.py:254)
 웹 서버가 오래 죽어 있으면 같은 제출을 30초마다 무한히 다시 집습니다. 워커가 순차 처리([:312](worker/run.py:312))라 그동안 **대기열 뒤쪽은 한 건도 진행되지 않습니다.** 실패 횟수를 세서 일정 횟수 후 뒤로 미루거나 error로 종결하는 출구가 필요합니다.
 
-### 7. 에러 메시지를 URL 인코딩 없이 쿼리스트링에 삽입 · [submissions.py:107](app/routers/submissions.py:107)
+### 7. ~~에러 메시지를 URL 인코딩 없이 쿼리스트링에 삽입~~ → **해결** (2026-10-01) · [submissions.py:123](app/routers/submissions.py:123)
 ```python
 return RedirectResponse(f"/submit?error={message}", status_code=303)
 ```
 현재 메시지들에는 `&`·`#`가 없어 **지금은 터지지 않습니다**(잠재적 결함). 다만 [:118](app/routers/submissions.py:118)처럼 설정값을 끼워 넣는 문구가 있어, 문구를 한 번 고치면 조용히 깨집니다. `urllib.parse.quote` 한 줄이면 됩니다. XSS는 Jinja 자동 이스케이프([submit.html:7](app/templates/submit.html:7))로 막혀 있습니다.
+
+**해결 경위**: 업로드 일시 중지 기능이 들어오면서 관리자가 직접 쓴 공지 문구가 이 경로로 가게 됐습니다. "잠재적"이던 결함이 실제로 터질 수 있게 된 것입니다. 그래서 `quote(message, safe='')`로 인코딩하도록 고쳤습니다. 회귀 테스트는 `tests/test_upload_pause.py::test_paused_message_survives_the_redirect_query`입니다.
 
 ### 8. N+1 쿼리 — 규모 전제에만 의존 · [admin.py:175](app/routers/admin.py:175), [leaderboard.py:42-47](app/routers/leaderboard.py:42)
 `{team.id: get_daily_done_count(db, team) for team in season.teams}`는 팀당 COUNT 1회, `build_leaderboard`는 팀당 `team.submissions` 지연 로딩입니다. [records.py:3](app/records.py:3)이 "시즌당 약 10팀"을 근거로 캐시 없음을 정당화하는데, **그 상한은 코드 어디에도 강제돼 있지 않습니다**([MAX_BULK_TEAMS=50](app/routers/admin.py:39)은 1회 등록 상한일 뿐 누적 상한이 아님). 지금 고칠 필요는 없지만, 전제가 깨지는 지점이 문서에만 있고 코드에 없다는 것이 문제입니다.

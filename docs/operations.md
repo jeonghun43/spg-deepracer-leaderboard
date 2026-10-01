@@ -297,7 +297,7 @@ EOF
 | 데이터 | 저장 위치 | 어디서 확인 |
 |---|---|---|
 | **평가 결과**(완주 여부, 랩타임, 이탈 횟수) | PostgreSQL `evaluation_results` 테이블 | 웹: 리더보드, 참가자 제출 화면, 관리자 시즌 상세 |
-| **평가 영상** | `storage/videos/{시즌}/{팀}/{제출ID}.mp4` | 웹: 리더보드의 "영상 보기" (`/media/videos/...`) |
+| **평가 영상** | `storage/videos/{시즌}/{팀}/{제출ID}.mp4` | 웹: 리더보드의 "보기"(최고기록, 공개), 참가자 제출 화면(직전 제출, 그 팀만). URL은 `/media/videos/{제출ID}` — 파일 경로가 아니다 |
 | **원본 metrics json** (DRFC가 만든 것) | `storage/metrics/{시즌}/{팀}/{제출ID}.json` | 파일 직접 열람 (재파싱·검증용) |
 | **시뮬레이션 로그** (robomaker/rl_coach) | `storage/eval_logs/{제출ID}.log` | 파일 직접 열람 (실패 원인 추적용) |
 | **워커 진행 로그** | `/tmp/worker.log` (`run_worker.sh` 리다이렉트 대상) | `tail -f /tmp/worker.log` |
@@ -366,6 +366,22 @@ bash scripts/backup.sh
 
 ⚠️ **서버 IP나 접속 계정이 바뀌면 `BACKUP_REMOTE_HOST`를 반드시 함께 고쳐야 한다.** 안 고치면
 백업이 조용히 실패하고, 그 사실은 `STATUS` 파일을 열어봐야만 드러난다.
+
+**실제로 겪은 사고: 4주 동안 백업이 하나도 안 됐다 (2026-09-08 ~ 10-01).** `backup.log`에는 매번
+`실패: 덤프 내용이 pg_dump 산출물이 아닙니다`가 찍혔다. 그런데 남은 `db_*.sql.gz.tmp`를 풀어 보면
+머리말도 완료 표시도 다 있는 **정상 덤프**였다. 고장 난 것은 덤프가 아니라 검사 코드였다.
+
+- 원인: 검사가 `gunzip -c | head -20 | grep -q` 형태였다. head가 20줄만 읽고 파이프를 닫으면, 아직
+  쓰던 gunzip이 SIGPIPE(exit 141)로 끝난다. 스크립트의 `set -o pipefail`이 이것을 파이프라인 실패로
+  판정했다.
+- 처음에 안 드러난 이유: 덤프(압축 해제 기준)가 파이프 버퍼 64KB보다 작으면 gunzip이 먼저 다 쓰고
+  끝나서 문제가 생기지 않는다. 제출 기록이 쌓여 덤프가 68KB가 된 날부터 매번 실패했다.
+  **데이터가 커져야만 드러나는 버그라서, 대회 초반 테스트로는 잡을 수 없었다.**
+- 수정: 한 번만 풀어 변수에 담고, 입력을 끝까지 읽는 도구(sed, tail)로만 앞뒤를 자른다.
+  `pipefail` 스크립트에서 **중간에 읽기를 멈추는 명령(`head`, `grep -q`)을 파이프 가운데에 두지 않는다.**
+- 교훈: 실패가 `STATUS`에만 기록되고 아무도 열어보지 않았다. 대회 기간에는 `STATUS` 확인을 매일 하는
+  일에 넣는다([handover.md](handover.md) 체크리스트). 실패할 때 남은 `.tmp`는 검사 단계에서 떨어진
+  것이라 내용이 멀쩡할 수 있다. 지우기 전에 위처럼 풀어서 확인한다.
 
 **백업본을 노트북 밖으로 보내기**: Google Drive 데스크톱 → 설정 → **내 컴퓨터** → 폴더 추가 →
 `C:\Users\<사용자>\drleader-backup`를 **"Google Drive에 백업"**으로 지정한다. Drive의 가상
@@ -458,7 +474,7 @@ docker compose exec -T db psql -U drleader -d postgres -c "DROP DATABASE drleade
 | 디스크 반환 | 파일을 지우면 즉시 반환 | VHDX가 자동 축소되지 않아 파일을 지워도 가상 디스크 크기는 그대로(수동 compact 필요) |
 | 파일 권한 | 전부 `777`로 보임(메타데이터 표현 제한) | 정상 동작 |
 
-**판단**: 보존 정책(평가 직후 최고기록 외 파일 삭제 — [ux-improvements.md](../specs/001-online-virtual-evaluation/ux-improvements.md) §2-5-2)을
+**판단**: 보존 정책(평가 직후 최고기록 외 파일 삭제, 직전 제출 영상만 예외 — [ux-improvements.md](../specs/001-online-virtual-evaluation/ux-improvements.md) §2-5-2)을
 적용하면 시즌당 약 2.6GB로 수렴해 33GB로 충분하다. 경로를 바꾸려면 웹 컨테이너 볼륨 마운트, 워커의
 `STORAGE_DIR`, 백업 절차를 동시에 맞춰야 하고 서비스 중단이 필요하므로 참가자가 쓰는 중에 할 이유가 없다.
 **성능이 문제가 되거나 용량이 다시 빠듯해지면 시즌 종료 후 이전한다.**
@@ -466,6 +482,22 @@ docker compose exec -T db psql -U drleader -d postgres -c "DROP DATABASE drleade
 **어느 쪽이든 다른 노트북 이전은 문제없다.** 옮겨야 하는 것은 저장 위치와 무관하게 세 가지로 동일하다 —
 ① `storage/` 디렉터리 ② PostgreSQL 데이터(`pg_dump`) ③ `.env`. 절차는
 [gpu-server-migration.md](../specs/001-online-virtual-evaluation/gpu-server-migration.md) 참고.
+
+## 긴급 점검 중 모델 업로드 일시 중지
+
+대회 기간에 평가 서버를 급히 고쳐야 할 때 쓴다. 절차와 이 기능을 만든 이유는
+[handover.md](handover.md) §3-0에 있다. 요약:
+
+- **관리자 화면 → 시즌 상세 → "모델 업로드" 카드**에서 [업로드 중지] / [업로드 재개]. 진행중 시즌에만 카드가 보인다.
+- 막히는 것은 **새 업로드뿐**이다. 대기·평가 중인 제출은 그대로 처리된다(워커를 멈추면 대기열에 남는다).
+- 공지 문구는 참가자 제출 화면 맨 위에 나간다. 비우면 기본 문구가 나간다.
+- 상태는 DB `seasons.uploads_paused`에 저장되므로 웹 컨테이너를 재기동해도 유지된다.
+  관리자 화면에 들어갈 수 없을 때는 SQL로 직접 바꿔도 된다:
+
+```sql
+UPDATE seasons SET uploads_paused = true,  uploads_paused_at = now() WHERE id = <시즌ID>;  -- 중지
+UPDATE seasons SET uploads_paused = false, uploads_paused_message = NULL, uploads_paused_at = NULL WHERE id = <시즌ID>;  -- 재개
+```
 
 ## 참가자 제출 형식 안내
 

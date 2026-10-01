@@ -194,6 +194,13 @@ rl-deepracer-sagemaker/mp4/camera-topview/0-video.mp4    261 Bytes  깨짐 ← w
 - `queued`/`running` 상태 제출의 모델 파일은 **절대 지우지 않는다**(평가에 쓰이는 중).
 - 기존 `season_archive.archive_season()`과 같은 규칙이므로 삭제 로직을 공용 모듈로 뽑아 양쪽이 함께 쓴다.
 
+**변경 (2026-10-01): 직전 완료 제출의 영상은 남긴다.** 위 규칙대로라면 완주 못 한 제출의 영상은
+업로드되고 몇 초 뒤에 지워진다. 그러면 참가자는 "완주 실패 · 트랙 이탈" 한 줄만 받고, **어디서**
+탈선하는지 볼 수 없다. 영상은 1건 13.8MB라 팀당 하나 더 남겨도 시즌 전체로 약 0.14GB(10팀 기준)이고,
+병목인 모델 파일은 그대로 지운다. 이 영상은 그 팀만 볼 수 있어야 해서 `/media/videos`의 공개
+StaticFiles mount를 권한 확인 라우트(`app/routers/media.py`)로 바꿨다. 시즌 아카이브 때는 이 영상도
+지운다(`keep_latest_video=False`).
+
 ### 2-5-3. [버그] 상대 경로 전환으로 아카이브 삭제가 조용히 실패
 
 Phase 9-0에서 `model_path`를 상대 경로로 바꿨는데, `season_archive._remove_file_if_exists()`는

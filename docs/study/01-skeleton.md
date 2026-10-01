@@ -117,7 +117,7 @@ ASGI의 `receive`가 **청크 단위**라는 점이 4단계(파일 업로드)에
 **우리 코드에서 `async def`는 딱 3곳이다** — 전부 파일을 청크로 읽어야 하는 곳:
 
 ```python
-# app/routers/submissions.py:92
+# app/routers/submissions.py:108
 async def submit_upload(...):
     while chunk := await model_file.read(1024 * 1024):
 
@@ -145,7 +145,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
-from app.routers import admin, auth, internal, leaderboard, submissions
+from app.routers import admin, auth, internal, leaderboard, media, submissions
 
 # 자동 생성 문서는 공개하지 않는다. API를 쓰는 외부 소비자가 없고(워커는 고정된 /internal
 # 경로만 호출한다), 열어두면 관리자·워커 엔드포인트의 존재와 요청 형식이 그대로 드러난다.
@@ -163,11 +163,13 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 settings.videos_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/media/videos", StaticFiles(directory=str(settings.videos_dir)), name="videos")
+# 평가 영상은 StaticFiles로 공개하지 않는다 — 최고기록이 아닌 직전 제출 영상은 그 팀만 봐야 해서
+# 권한을 확인하는 라우트(app/routers/media.py)로 내준다.
 
 app.include_router(auth.router)
 app.include_router(submissions.router)
 app.include_router(leaderboard.router)
+app.include_router(media.router)
 app.include_router(admin.router)
 # 관리자 로그인 폼 — .env의 ADMIN_LOGIN_PATH가 정하는 비밀 경로에 붙는다.
 app.include_router(admin.login_router)
@@ -334,18 +336,31 @@ CSS 파일이나 동영상은 계산할 게 없다. 그냥 파일을 통째로 �
 - **Range 요청 지원** ← 동영상 재생에 필수
 - 디렉터리 탈출(`../../etc/passwd`) 방지
 
-두 개를 mount한 이유가 다르다:
+지금 mount는 `/static` 하나뿐이다:
 
-| 마운트 | 디렉터리 | 왜 |
+| 경로 | 디렉터리 | 처리 방식 | 왜 |
+|---|---|---|---|
+| `/static` | `app/static` | `StaticFiles` mount | 코드와 함께 배포되는 CSS·**upload.js**. 누가 봐도 되는 파일 |
+| `/media/videos/{제출id}` | `settings.videos_dir` = `storage/videos` | **일반 라우트** (`app/routers/media.py`) | 런타임에 워커가 만드는 영상. **권한 확인이 필요**하다 |
+
+**예전에는 `/media/videos`도 StaticFiles mount였다.** 남는 영상이 팀별 최고기록 하나뿐이었고,
+최고기록 영상은 리더보드에 완전 공개(spec)라서 인증이 필요 없었다.
+그런데 참가자가 탈선 위치를 볼 수 있도록 **직전 제출 영상도 남기게** 되면서 문제가 생겼다.
+이 영상은 그 팀만 봐야 하는데, StaticFiles에는 "누가 요청했는가"를 볼 방법이 없다. 게다가
+파일 경로가 `{시즌}/{팀}/{제출}.mp4`라 번호만 바꿔 넣으면 다른 팀 영상이 열린다.
+그래서 mount를 없애고 제출 id를 받는 라우트로 바꿨다. 라우트는 권한을 확인한 뒤
+`FileResponse`로 파일을 내준다. `FileResponse`도 Range 요청을 처리하므로 영상 탐색은 그대로 된다.
+
+| 누가 | 최고기록 영상 | 직전 제출 영상 |
 |---|---|---|
-| `/static` | `app/static` | 코드와 함께 배포되는 CSS·**upload.js**. 이미지에 포함됨 |
-| `/media/videos` | `settings.videos_dir` = `storage/videos` | **런타임에 워커가 만들어내는 파일**. 볼륨으로 마운트됨 |
+| 아무나 (비로그인 포함) | ✅ | ❌ 404 |
+| 그 팀 | ✅ | ✅ |
 
-`settings.videos_dir.mkdir(parents=True, exist_ok=True)` 가 **mount보다 먼저** 호출되는 이유:
-`StaticFiles(directory=...)`는 생성 시점에 디렉터리 존재를 확인하고, 없으면 예외를 던진다.
+권한이 없을 때 403이 아니라 404를 준다. 403이면 "그 번호의 영상이 있다"는 사실을 알려 주는
+셈이기 때문이다. 관리자 경로 은닉(`get_current_admin`)과 같은 이유다.
 
-**보안 관점**: `/media/videos`는 인증 없이 누구나 접근 가능하다.
-이건 **의도된 것**이다(spec: 리더보드/영상은 완전 공개).
+`settings.videos_dir.mkdir(...)`는 mount가 없어진 지금도 남아 있다. 워커가 영상을 올릴 때
+(`internal.upload_video`) 상위 디렉터리가 있어야 하기 때문이다.
 
 ---
 

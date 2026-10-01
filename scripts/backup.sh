@@ -109,13 +109,23 @@ gzip -t "$DB_FILE.tmp" 2>/dev/null || fail "덤프 압축이 손상됐습니다"
 DUMP_BYTES="$(gunzip -c "$DB_FILE.tmp" | wc -c)"
 [ "$DUMP_BYTES" -ge "$MIN_DUMP_BYTES" ] || fail "덤프가 너무 작습니다 (압축 해제 ${DUMP_BYTES}바이트)"
 
-gunzip -c "$DB_FILE.tmp" | head -20 | grep -q "PostgreSQL database dump" \
+# **`gunzip -c | head -20 | grep -q`로 검사하면 안 된다.** head가 20줄만 읽고 파이프를 닫으면,
+# 아직 쓰는 중이던 gunzip이 SIGPIPE(exit 141)로 죽는다. 위의 `set -o pipefail` 때문에 파이프라인
+# 전체가 실패로 판정되어, 정상 덤프인데도 "pg_dump 산출물이 아닙니다"로 떨어진다.
+# 덤프가 파이프 버퍼(64KB)보다 작을 때는 gunzip이 먼저 다 쓰고 끝나서 드러나지 않았다.
+# 2026-09-08에 압축 해제 크기가 68KB가 되면서 그날부터 매번 실패했다(2026-10-01 발견).
+# 그래서 한 번만 풀어 변수에 담고, 입력을 끝까지 읽는 도구(sed, tail)로만 앞뒤를 자른다.
+DUMP_TEXT="$(gunzip -c "$DB_FILE.tmp")"
+DUMP_HEAD="$(printf '%s\n' "$DUMP_TEXT" | sed -n '1,20p')"
+DUMP_TAIL="$(printf '%s\n' "$DUMP_TEXT" | tail -n 5)"
+
+[[ "$DUMP_HEAD" == *"PostgreSQL database dump"* ]] \
     || fail "덤프 내용이 pg_dump 산출물이 아닙니다"
 # pg_dump는 정상 종료 시 마지막에 완료 표시를 남긴다. 중간에 끊긴 덤프를 걸러내는 핵심 검사다.
-gunzip -c "$DB_FILE.tmp" | tail -5 | grep -q "PostgreSQL database dump complete" \
+[[ "$DUMP_TAIL" == *"PostgreSQL database dump complete"* ]] \
     || fail "덤프가 끝까지 기록되지 않았습니다 (중간에 끊김)"
+unset DUMP_HEAD DUMP_TAIL
 
-DUMP_TEXT="$(gunzip -c "$DB_FILE.tmp")"
 for table in "${REQUIRED_TABLES[@]}"; do
     grep -q "CREATE TABLE public.$table" <<<"$DUMP_TEXT" \
         || fail "덤프에 $table 테이블이 없습니다"

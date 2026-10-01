@@ -115,7 +115,7 @@ def recover_stale_running(db: Session) -> None:
 
 
 def prune_finished_team_files(db: Session, submission_id: int) -> None:
-    """평가가 끝난 팀의 파일을 보존 정책대로 정리한다 (최고기록만 남긴다).
+    """평가가 끝난 팀의 파일을 보존 정책대로 정리한다 (최고기록 + 직전 제출 영상만 남긴다).
 
     시즌 종료까지 기다리면 디스크가 먼저 찬다 (모델 1건 약 250MB).
 
@@ -215,6 +215,12 @@ def process_submission(submission_id: int) -> None:
             best_progress, failure_reason = drfc.summarize_progress(
                 metrics, log_path_for(submission.id)
             )
+            if not metrics.get("metrics"):
+                # 이 경우 parse_evaluation_result의 이탈 횟수는 무조건 0이다. 참가자 화면에
+                # "탈선 0회"로 보이면 거짓말이 되므로 로그에서 센 값으로 바꾼다.
+                logged_off_track = drfc.count_off_track_from_log(log_path_for(submission.id))
+                if logged_off_track is not None:
+                    off_track = logged_off_track
 
             # 영상 키는 다음 평가 때 덮어써지므로 결과 저장 전에 먼저 내려받아 둔다.
             local_video = work_dir / "evaluation.mp4"

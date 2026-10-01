@@ -29,3 +29,17 @@ def get_team_best(team: Team) -> tuple[Submission | None, "EvaluationResult | No
             best_result = result
 
     return best_submission, best_result
+
+
+def get_latest_done_submission(team: Team) -> Submission | None:
+    """평가가 끝난(DONE) 가장 최근 제출. 완주 여부는 따지지 않는다.
+
+    참가자 제출 탭의 "직전 주행 영상"이 가리키는 제출이다. 대기/평가 중이거나 오류로
+    끝난 제출은 영상이 없으므로 건너뛰고, 그 이전 완료분을 계속 보여준다.
+    """
+    done = [
+        s for s in team.submissions if s.status == SubmissionStatus.DONE and s.result is not None
+    ]
+    if not done:
+        return None
+    return max(done, key=lambda s: s.submitted_at)

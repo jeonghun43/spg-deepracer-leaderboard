@@ -362,8 +362,9 @@ assert 관리자.json() == 아무거나.json()      # ← 본문까지
 
 | 무엇 | 어디서 공유되나 |
 |---|---|
-| `get_team_best` | 리더보드 표시 + 파일 보존 정책 |
-| `prune_team_files` | 워커(local) + 서버(`internal.py`) + 시즌 아카이브 |
+| `get_team_best` | 리더보드 표시 + 파일 보존 정책 + 영상 공개 판정(`media.py`) |
+| `get_latest_done_submission` | 파일 보존 정책(직전 영상 남김) + 제출 화면(직전 영상 카드) |
+| `prune_team_files` | 워커(local) + 서버(`internal.py`) + 시즌 아카이브(`keep_latest_video=False`) |
 | `ACTIVE_SUBMISSION_STATUSES` | `quota.py`(SQL) + `retention.py`(파이썬) |
 | `settings.daily_submission_limit` | 검증 + 화면 표시 + 에러 메시지 |
 | `settings.model_upload_max_bytes` | 서버 검증 + **HTML `data-*` → JS 검증** |
@@ -541,7 +542,7 @@ def uses_http() -> bool:
 
 ## 8. 테스트 — 무엇을 테스트했고 무엇을 안 했나
 
-### 현재 테스트 목록 (15개 + 검증 스크립트)
+### 현재 테스트 목록 (18개 + 검증 스크립트)
 
 ```
 tests/test_admin_access.py           — 은닉·잠금·네비게이션 (16개 케이스)
@@ -549,12 +550,15 @@ tests/test_checkpoint_validation.py  — 체크포인트 사전 검증
 tests/test_evaluation_parsing.py     — parse_evaluation_result
 tests/test_leaderboard_build.py      — build_leaderboard
 tests/test_leaderboard_ranking.py    — 순위 정렬
+tests/test_media_access.py           — 영상 접근 권한 (최고기록 공개 / 직전 제출은 그 팀만)
 tests/test_model_archive.py          — 압축 해제 / 모델 루트 탐색
-tests/test_progress_summary.py       — summarize_progress / 로그 파싱
+tests/test_progress_summary.py       — summarize_progress / 로그 파싱 / 로그에서 이탈 횟수
 tests/test_quota_adjustment.py       — 하루 한도 보정
-tests/test_retention.py              — 파일 보존 정책
+tests/test_quota_day_boundary.py     — 하루 경계 (제출 시각 기준)
+tests/test_retention.py              — 파일 보존 정책 (직전 제출 영상 보존 포함)
 tests/test_storage_paths.py          — 경로 해석
 tests/test_team_name_parsing.py      — parse_team_names
+tests/test_upload_pause.py           — 업로드 일시 중지 (서버 거절·관리자 토글)
 tests/test_upload_response_mode.py   — Accept 헤더 협상
 tests/test_video_selection.py        — 영상 앵글 선택
 tests/test_worker_status.py          — 하트비트 판정
@@ -674,7 +678,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests -q
 | S5 | `/logout`이 GET | `auth.py`, `admin.py` | 낮음 |
 | S6 | 사용자 열거 타이밍 차이 | `auth.py`, `admin.py` | 낮음 |
 | S7 | 파일명 살균 없음 (타임스탬프 접두사가 우연히 막고 있음) | `submissions.py:129` | 중 |
-| S8 | `error` 쿼리 파라미터로 임의 문구 표시 가능 (피싱) | `submissions.py:106` | 낮음 |
+| S8 | `error` 쿼리 파라미터로 임의 문구 표시 가능 (피싱). 2026-10-01부터 메시지를 URL 인코딩한다(`&`·`#` 잘림은 해결). 임의 문구 표시 자체는 그대로다 | `submissions.py:123` | 낮음 |
 | S9 | 개발용 compose의 DB가 `0.0.0.0:5432` | `docker-compose.yml` | 중 (개발 환경만) |
 | S10 | `internal.py`에서 인증보다 본문이 먼저 읽힌다 | `internal.py:58` | 낮음 |
 | S11 | `X-Forwarded-For` 위조 가능 (아이디 카운터가 완화) | `admin.py:59` | 낮음 |

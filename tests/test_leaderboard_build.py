@@ -94,12 +94,15 @@ def test_submission_count_excludes_errors():
     assert ranked[0]["total_submissions"] == 2
 
 
-def test_video_url_uses_media_path():
-    team = make_team("팀", [
-        make_submission(BASE_TIME, SubmissionStatus.DONE, FinishStatus.FINISHED, 100.0, video_path="1/2/3.mp4")
-    ])
+def test_video_url_points_to_submission_not_file_path():
+    """파일 경로를 그대로 URL에 넣지 않는다 — 권한 확인 라우트가 제출 id로 받는다
+    (app/routers/media.py). 경로를 노출하면 다른 제출 번호로 바꿔 넣어 볼 수 있었다."""
+    submission = make_submission(
+        BASE_TIME, SubmissionStatus.DONE, FinishStatus.FINISHED, 100.0, video_path="1/2/3.mp4"
+    )
+    team = make_team("팀", [submission])
     ranked, _ = build([team])
-    assert ranked[0]["video_url"] == "/media/videos/1/2/3.mp4"
+    assert ranked[0]["video_url"] == f"/media/videos/{submission.id}"
 
 
 def test_missing_video_yields_no_url():

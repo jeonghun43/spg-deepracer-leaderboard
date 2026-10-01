@@ -89,3 +89,9 @@ button[disabled] { opacity: 0.6; cursor: default; }
 .field { margin-bottom: 14px; }
 label { display: block; margin-bottom: 4px; font-size: 0.9rem; color: #9aa2b1; }
 video { max-width: 100%; border-radius: 6px; }
+/* 관리자가 업로드를 일시 중지했을 때의 공지 (긴급 패치용) */
+.notice {
+  background: #3a3320; color: #e8c86b; border: 1px solid #5a4d2a;
+  border-radius: 6px; padding: 10px 14px; margin: 0 0 14px;
+}
+.badge.status-paused { background: #3a3320; color: #e8c86b; }

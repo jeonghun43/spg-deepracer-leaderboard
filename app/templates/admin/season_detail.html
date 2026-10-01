@@ -69,6 +69,35 @@
 {% endif %}
 <a href="/leaderboard/{{ season.id }}">공개 리더보드 보기 →</a>
 
+{% if season.status.value == 'active' %}
+{# 긴급 패치용. 시즌 상태 전환과 달리 되돌릴 수 있다 — 새 업로드만 막고 대기열은 그대로 둔다. #}
+<div class="card">
+  <h2 style="margin-top:0;">모델 업로드</h2>
+  {% if season.uploads_paused %}
+    <p><span class="badge status-paused">업로드 중지됨</span>
+      {% if season.uploads_paused_at %}— {{ season.uploads_paused_at | kst }}부터{% endif %}</p>
+    <p class="muted">참가자 공지: {{ season.uploads_paused_message or default_paused_message }}</p>
+    <form method="post" action="/admin/seasons/{{ season.id }}/uploads-pause"
+          onsubmit="return confirm('모델 업로드를 다시 열까요?');">
+      <input type="hidden" name="action" value="resume">
+      <button type="submit">업로드 재개</button>
+    </form>
+  {% else %}
+    <p><span class="badge status-done">업로드 허용</span></p>
+    <form method="post" action="/admin/seasons/{{ season.id }}/uploads-pause"
+          onsubmit="return confirm('참가자의 새 모델 업로드를 중지할까요? 이미 대기·평가 중인 제출은 그대로 처리됩니다.');">
+      <input type="hidden" name="action" value="pause">
+      <div class="field">
+        <label for="pause-message">참가자에게 보일 공지 (비우면 기본 문구)</label>
+        <input type="text" id="pause-message" name="message" maxlength="500" style="width:100%;"
+               placeholder="{{ default_paused_message }}">
+      </div>
+      <button type="submit" class="danger">업로드 중지</button>
+    </form>
+  {% endif %}
+</div>
+{% endif %}
+
 <h2>참가팀</h2>
 <div class="card">
   <form method="post" action="/admin/seasons/{{ season.id }}/teams/new">

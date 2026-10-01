@@ -78,6 +78,8 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
         select(Submission).where(Submission.team_id == team.id)
         .order_by(Submission.submitted_at.desc()).limit(1)
     ).scalar_one_or_none()
+    # 직전 주행 영상 카드용 — 가장 최근에 평가가 끝난 제출 (§2-7)
+    latest_done_submission = get_latest_done_submission(team)
     queue_position = _queue_position(db, active_submission) if active_submission else None
     estimated_wait_minutes = (
         (queue_position + 1) * settings.eval_minutes_estimate if queue_position is not None else None
@@ -88,11 +90,14 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
         and active_submission is None
         and remaining > 0
         and not team.disqualified
+        and not season.uploads_paused
     )
     return templates.TemplateResponse(request, "submit.html", {
         "team": team, "season": season,
         "active_submission": active_submission,
         "latest_submission": latest_submission,
+        "latest_done_submission": latest_done_submission,
+        "uploads_paused_message": uploads_paused_message(season) if season.uploads_paused else None,
         "queue_position": queue_position,
         "estimated_wait_minutes": estimated_wait_minutes,
         "remaining": remaining,
@@ -108,7 +113,7 @@ def submit_form(request: Request, team: Team = Depends(get_current_team), db: Se
     })
 ```
 
-### 2-1. `can_submit` — 4개 조건의 AND
+### 2-1. `can_submit` — 5개 조건의 AND
 
 ```python
 can_submit = (
@@ -116,10 +121,11 @@ can_submit = (
     and active_submission is None          # 진행 중인 제출이 없고
     and remaining > 0                      # 오늘 횟수가 남았고
     and not team.disqualified              # 실격이 아니고
+    and not season.uploads_paused          # 관리자가 업로드를 일시 중지하지 않았고
 )
 ```
 
-**이 4개가 POST 핸들러의 검증과 일치한다.** 화면에서 버튼을 숨기고, 서버에서도 다시 검사한다.
+**이 5개가 POST 핸들러의 검증과 일치한다.** 화면에서 버튼을 숨기고, 서버에서도 다시 검사한다.
 
 > **원칙: 클라이언트 검증은 UX, 서버 검증은 보안.**
 > 버튼을 숨겨도 `curl`로 POST를 직접 날릴 수 있다.
@@ -131,6 +137,36 @@ can_submit = (
 {% if can_submit %}<script src="/static/upload.js" defer></script>{% endif %}   {# 스크립트 로드 #}
 ```
 폼이 없으면 스크립트도 로드하지 않는다 — **필요 없는 JS를 안 내려보낸다.**
+
+**다섯 번째 조건 `uploads_paused`는 나중에 추가됐다 (2026-10-01).** 지난 대회 온라인 주행 기간에
+평가 서버를 급히 고친 적이 있는데, 그동안 참가자 업로드를 막을 방법이 없었다.
+`season.status`로 막을 수도 없다. 상태는 한 방향으로만 바뀌어서 되돌릴 수 없기 때문이다(2단계 #5 마이그레이션).
+관리자가 시즌 관리 화면에서 [업로드 중지]를 누르면, 참가자 화면 맨 위에 공지 문구가 뜨고 폼이 사라진다.
+
+**여기서도 "화면 검증은 UX, 서버 검증은 보안"이 그대로 적용된다.** 중지 **전에** 페이지를 열어 둔
+참가자에게는 폼이 그대로 남아 있다. 그래서 POST 핸들러가 다시 검사한다(§3-5).
+
+### 2-7. 직전 평가 주행 영상 카드 — "어디서 탈선했나"
+
+**[쉬움]** 예전 제출 화면에는 "완주 실패 (45%) · 트랙 이탈" 같은 한 줄만 나왔다.
+영상은 최고기록 것만 리더보드에 남았다. 그래서 완주를 한 번도 못 한 팀은 자기 차가 **어디서**
+나가는지 볼 방법이 없었다. 이제 제출 탭에 가장 최근에 끝난 주행 영상과 트랙 이탈 횟수가 나온다.
+
+**[전공]** 세 군데가 맞물려 있다:
+
+| 무엇 | 어디 | 핵심 |
+|---|---|---|
+| 어떤 제출인가 | `records.get_latest_done_submission` | `DONE` + result 있는 것 중 최신. 평가 중·오류는 건너뛴다 |
+| 영상이 남아 있는가 | `retention.prune_team_files` | 그 제출은 모델만 지우고 영상은 남긴다 (6단계 §8) |
+| 누가 볼 수 있는가 | `routers/media.py` `can_view_video` | 최고기록이 아니면 **그 팀만** — 남은 404 |
+
+`latest_submission`(아무 상태나 최신 1건)과 `latest_done_submission`을 **따로** 구하는 이유가 있다.
+새 제출이 평가 중이면 `latest_submission`은 결과가 없는 대기 건이다. 그때도 직전 영상은
+계속 보여야 한다. 템플릿은 두 id가 다르면 "아래는 그 이전에 평가가 끝난 제출입니다"라고 안내한다.
+
+트랙 이탈 횟수는 `EvaluationResult.off_track_count`이다. 처음부터 저장은 하고 있었지만 화면에는
+나오지 않았다. 한 바퀴도 못 돈 제출은 metrics가 비어서 0이 저장됐는데, 이제는 평가 로그에서
+센 값을 쓴다(6단계 §9-5).
 
 ### 2-2. **설정값을 화면에 내려보내는 이유 — 단일 진실 공급원**
 
@@ -463,6 +499,7 @@ except ClientDisconnect:
 ```python
 if team.disqualified:                          # 1. 메모리 (팀 객체는 이미 로드됨)
 if season.status != SeasonStatus.ACTIVE:       # 2. 메모리
+if season.uploads_paused:                      # 2-1. 메모리 — 관리자 공지 문구를 그대로 안내
 if has_active_submission(db, team) is not None:# 3. DB 쿼리 1회
 if get_remaining_submissions(db, team) <= 0:   # 4. DB 쿼리 1회 (COUNT)
 if model_file is None or not model_file.filename:  # 5. 메모리

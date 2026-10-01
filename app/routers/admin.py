@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.quota import get_daily_done_count, today_kst
 from app.render import templates
+from app.routers.submissions import DEFAULT_UPLOADS_PAUSED_MESSAGE
 from app.season_archive import archive_season
 from app.security import generate_password, hash_password, verify_password
 
@@ -182,6 +183,7 @@ def render_season_detail(
             "skipped": skipped or [],
             "bulk_error": bulk_error,
             "max_bulk_teams": MAX_BULK_TEAMS,
+            "default_paused_message": DEFAULT_UPLOADS_PAUSED_MESSAGE,
         },
     )
 
@@ -214,6 +216,34 @@ def advance_status(
     elif next_status is not None:
         season.status = next_status
         db.commit()
+    return RedirectResponse(f"/admin/seasons/{season_id}", status_code=303)
+
+
+@router.post("/seasons/{season_id}/uploads-pause")
+def set_uploads_paused(
+    season_id: int,
+    action: str = Form(...),
+    message: str = Form(""),
+    admin: AdminAccount = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """긴급 패치 중 참가자의 새 업로드를 막고(pause) 다시 연다(resume).
+
+    시즌 상태를 바꾸는 것과 달리 되돌릴 수 있다. 이미 대기·평가 중인 제출은 그대로 두므로,
+    워커를 멈춰 두면 대기열에 남았다가 재개 후 순서대로 처리된다.
+    """
+    season = db.get(Season, season_id)
+    if season is None:
+        return RedirectResponse("/admin", status_code=303)
+    if action == "pause":
+        season.uploads_paused = True
+        season.uploads_paused_message = message.strip()[:500] or None
+        season.uploads_paused_at = dt.datetime.now(tz=dt.timezone.utc)
+    elif action == "resume":
+        season.uploads_paused = False
+        season.uploads_paused_message = None
+        season.uploads_paused_at = None
+    db.commit()
     return RedirectResponse(f"/admin/seasons/{season_id}", status_code=303)
 
 

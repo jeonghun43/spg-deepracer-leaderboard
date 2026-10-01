@@ -313,6 +313,36 @@ def extract_progress_from_log(log_path: Path) -> tuple[float | None, str | None]
     return best_progress, last_status
 
 
+def count_off_track_from_log(log_path: Path) -> int | None:
+    """평가 로그에서 트랙 이탈 횟수를 센다. 로그가 없으면 None.
+
+    metrics json이 비어 있으면(한 바퀴도 못 끝낸 경우) `parse_evaluation_result`가 0을 내는데,
+    바로 그 제출이 탈선 정보가 가장 필요한 경우다. 그래서 로그에서 따로 센다.
+
+    이탈 1회마다 상태가 `off_track`인 스텝이 **정확히 한 줄** 찍히고 곧바로 `pause`로 넘어간다
+    (continuous 평가의 리셋). 그래서 그 줄 수를 그대로 센다. 2026-10-01에 저장된 로그
+    17·21·23번으로 확인했고, metrics json의 trial별 off_track_count 합과 모두 일치했다.
+    """
+    if not log_path.is_file():
+        return None
+
+    count = 0
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                marker = line.find("SIM_TRACE_LOG:")
+                if marker == -1:
+                    continue
+                fields = line[marker + len("SIM_TRACE_LOG:") :].strip().split(",")
+                if len(fields) <= SIM_TRACE_STATUS_INDEX:
+                    continue
+                if fields[SIM_TRACE_STATUS_INDEX].strip().lower() == "off_track":
+                    count += 1
+    except OSError:
+        return None
+    return count
+
+
 def summarize_progress(
     metrics: dict, log_path: Path | None = None
 ) -> tuple[float | None, str | None]:

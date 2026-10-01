@@ -118,3 +118,36 @@ def test_unknown_reason_is_shown_as_is():
 
 def test_summary_handles_missing_result():
     assert failure_summary(None) == "완주 실패"
+
+
+# ── 로그에서 트랙 이탈 횟수 세기 ─────────────────────────────────────────
+#
+# metrics json이 비면 parse_evaluation_result의 이탈 횟수는 무조건 0이다. 한 바퀴도 못 돈
+# 제출이 참가자 화면에 "탈선 0회"로 보이지 않도록 로그에서 센다.
+
+
+def test_log_counts_each_off_track_event_once(tmp_path):
+    """실제 로그(17번)의 모양 — 이탈 1회마다 off_track 한 줄 뒤 곧바로 pause로 리셋된다."""
+    log = write_log(tmp_path, [
+        TRACE.format(step=1, done="False", progress="10.0", status="in_progress"),
+        TRACE.format(step=2, done="False", progress="35.5", status="off_track"),
+        TRACE.format(step=3, done="False", progress="35.5", status="pause"),
+        TRACE.format(step=4, done="False", progress="36.0", status="in_progress"),
+        TRACE.format(step=5, done="False", progress="37.8", status="off_track"),
+        TRACE.format(step=6, done="False", progress="37.9", status="pause"),
+        TRACE.format(step=7, done="True", progress="38.0", status="immobilized"),
+    ])
+    assert drfc.count_off_track_from_log(log) == 2
+
+
+def test_log_without_off_track_counts_zero(tmp_path):
+    log = write_log(tmp_path, [
+        TRACE.format(step=1, done="False", progress="10.0", status="in_progress"),
+        TRACE.format(step=2, done="True", progress="12.0", status="immobilized"),
+    ])
+    assert drfc.count_off_track_from_log(log) == 0
+
+
+def test_missing_log_gives_none_for_off_track(tmp_path):
+    """None이면 호출부가 metrics에서 얻은 값(0)을 그대로 둔다 — 모르는 것을 0으로 단정하지 않는다."""
+    assert drfc.count_off_track_from_log(tmp_path / "없음.log") is None

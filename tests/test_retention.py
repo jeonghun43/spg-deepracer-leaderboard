@@ -12,6 +12,7 @@ import pytest
 from app.config import settings
 from app.models import FinishStatus, SubmissionStatus
 from app.retention import prune_team_files
+from app.season_archive import archive_season
 
 BASE_TIME = dt.datetime(2026, 7, 26, 10, 0, tzinfo=dt.timezone.utc)
 
@@ -141,3 +142,79 @@ def test_absolute_legacy_path_is_resolved(storage):
     prune_team_files(team, storage / "videos")
 
     assert not model_file(storage, 2).exists()
+
+
+# ── 직전 제출 영상 보존 ─────────────────────────────────────────────────
+#
+# 참가자가 탈선 위치를 볼 수 있도록 직전 완료 제출의 영상은 남긴다. 모델(250MB)은 여전히 지운다.
+
+
+def make_unfinished(storage, sub_id, minutes=0):
+    """완주하지 못했지만 평가는 끝난(DONE) 제출 — 영상은 있다."""
+    submission = make_submission(storage, sub_id, SubmissionStatus.DONE, lap_time=0.0, minutes=minutes)
+    submission.result.finish_status = FinishStatus.TIMEOUT
+    submission.result.lap_time_seconds = None
+    return submission
+
+
+def test_latest_done_video_is_kept_but_model_removed(storage):
+    best = make_submission(storage, 1, SubmissionStatus.DONE, lap_time=90.0)
+    older = make_unfinished(storage, 2, minutes=10)
+    latest = make_unfinished(storage, 3, minutes=20)
+    team = make_team([best, older, latest])
+
+    prune_team_files(team, storage / "videos")
+
+    assert video_file(storage, 3).is_file(), "직전 제출 영상은 남아야 참가자가 탈선 위치를 본다"
+    assert latest.result.video_path is not None
+    assert not model_file(storage, 3).exists(), "직전 제출이라도 모델 파일은 지운다"
+    assert not video_file(storage, 2).exists(), "그보다 이전 제출 영상은 지운다"
+    assert video_file(storage, 1).is_file()
+
+
+def test_latest_video_survives_a_later_error(storage):
+    """마지막 제출이 오류로 끝나도 그 이전 완료 제출의 영상은 계속 보여준다."""
+    done = make_unfinished(storage, 1)
+    failed = make_submission(storage, 2, SubmissionStatus.ERROR, minutes=10)
+    team = make_team([done, failed])
+
+    prune_team_files(team, storage / "videos")
+
+    assert video_file(storage, 1).is_file()
+
+
+def test_latest_video_survives_while_new_submission_is_queued(storage):
+    done = make_unfinished(storage, 1)
+    queued = make_submission(storage, 2, SubmissionStatus.QUEUED, minutes=10)
+    team = make_team([done, queued])
+
+    prune_team_files(team, storage / "videos")
+
+    assert video_file(storage, 1).is_file()
+    assert model_file(storage, 2).is_file()
+
+
+def test_keep_latest_video_false_keeps_only_best(storage):
+    best = make_submission(storage, 1, SubmissionStatus.DONE, lap_time=90.0)
+    latest = make_unfinished(storage, 2, minutes=10)
+    team = make_team([best, latest])
+
+    prune_team_files(team, storage / "videos", keep_latest_video=False)
+
+    assert not video_file(storage, 2).exists()
+    assert video_file(storage, 1).is_file()
+
+
+def test_season_archive_removes_latest_video_too(storage):
+    """대회가 끝나면 직전 제출 영상을 볼 사람이 없다 — 아카이브는 최고기록만 남긴다."""
+    best = make_submission(storage, 1, SubmissionStatus.DONE, lap_time=90.0)
+    latest = make_unfinished(storage, 2, minutes=10)
+    team = make_team([best, latest])
+    team.account = None
+    season = types.SimpleNamespace(teams=[team], status=None)
+    db = types.SimpleNamespace(delete=lambda _obj: None, commit=lambda: None)
+
+    archive_season(db, season, storage / "videos")
+
+    assert not video_file(storage, 2).exists()
+    assert video_file(storage, 1).is_file()

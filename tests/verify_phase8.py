@@ -437,7 +437,8 @@ check("아카이브 후에도 리더보드 조회 가능", status == 200 and "88
 check("최고기록 영상 파일 보존", best_video.exists(), f"{best_video} 없음")
 check("최고기록 아닌 영상은 정리됨", not old_video.exists(), f"{old_video}가 남아있음")
 
-status, _, media = public.get(f"/media/videos/{season_id}/{team_a_id}/{sub2}.mp4")
+# 영상 URL은 파일 경로가 아니라 제출 id다 (app/routers/media.py). 최고기록 영상이라 비로그인도 받는다.
+status, _, media = public.get(f"/media/videos/{sub2}")
 check("아카이브 후 영상 URL 접근 가능", status == 200, f"status={status}")
 
 relogin = Client()
