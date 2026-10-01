@@ -232,7 +232,7 @@ SELECT s.id, t.name AS team, r.finish_status, round(r.lap_time_seconds::numeric,
 **`queued`가 쌓인 채 안 줄어들면** 이 서버가 아니라 **평가 서버(EC2)** 쪽 문제다. 이 서버는 제출을
 접수만 하고 평가는 EC2 워커가 한다. [worker-server-setup.md](worker-server-setup.md) §8.6의
 `journalctl -u drfc-worker`로 워커 로그를 먼저 본다. 스팟이 회수돼 인스턴스가 내려가 있을 수도
-있으니 AWS 콘솔에서 인스턴스 상태도 확인한다.
+있으니 AWS 콘솔에서 인스턴스 상태도 확인한다. 중지돼 있다면 원인 확인은 같은 문서 §8.11을 따른다.
 
 **시각은 UTC로 저장된다.** 위 쿼리의 `AT TIME ZONE 'Asia/Seoul'`이 한국 시간으로 바꿔주는
 부분이다. 이걸 빼고 조회하면 9시간 이른 시각이 나오니 놀라지 말 것.

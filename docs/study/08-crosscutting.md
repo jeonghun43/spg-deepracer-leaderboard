@@ -687,7 +687,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests -q
 | C2 | 동점 순위가 1, 2로 표시됨 (1, 1, 3이 관례) | `leaderboard.html:14` | 중 |
 | C3 | `recover_stale_running`이 시작 시에만 실행 | `run.py:295` | 중 (하트비트가 완화) |
 | C4 | 워커에 재시작 정책 없음 | 운영 | **중** |
-| C5 | 하루 한도가 `finished_at` 기준 — 워커가 밤에 꺼져 있으면 아침에 몰린다 | `quota.py` | 중 |
+| C5 | ~~하루 한도가 `finished_at` 기준 — 워커가 밤에 꺼져 있으면 아침에 몰린다~~ → **해결** (2026-09-11, `submitted_at` 기준) | `quota.py` | ~~중~~ |
 | C6 | `inject_model`의 delete→upload 사이 중단 시 `model/`이 빈 상태 | `drfc.py:208` | 낮음 |
 | C7 | 상태 문자열이 raw SQL에 하드코딩 | `run.py:43` | 낮음 |
 | C8 | `worker_heartbeats` 첫 INSERT 경쟁 (upsert 아님) | `worker_status.py:35` | 낮음 |
@@ -747,8 +747,9 @@ PYTHONPATH=. .venv/bin/python -m pytest tests -q
 | 팀 로그인 bcrypt CPU 소모로 서버 마비 | ✅ `scope="team"` 잠금 (S2) |
 | 관리자 세션이 14일 산다 | ✅ `session_max_age_seconds` = 8시간 (S3) |
 | 동시 제출 시 250MB 고아 파일이 영구히 남음 | ✅ `IntegrityError` → rollback + `unlink` (C1) |
+| 자정 무렵 제출이 다음 날 한도를 깎음 | ✅ 하루 카운트를 `submitted_at`(제출 시각) 기준으로 (C5) |
 
-**17개가 해결됐다.** 이게 이 프로젝트가 실제로 운영되며 배운 것들이다.
+**18개가 해결됐다.** 이게 이 프로젝트가 실제로 운영되며 배운 것들이다.
 
 ---
 

@@ -24,6 +24,8 @@ services:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-drleader}:${POSTGRES_PASSWORD:-drleader}@db:5432/${POSTGRES_DB:-drleader}
       SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
       SESSION_HTTPS_ONLY: ${SESSION_HTTPS_ONLY:-false}
+      # 운영(prod)과 같은 키를 넘겨, 로컬에서도 한도 변경을 그대로 재현할 수 있게 한다.
+      DAILY_SUBMISSION_LIMIT: ${DAILY_SUBMISSION_LIMIT:-3}
     depends_on:
       - db
     ports:

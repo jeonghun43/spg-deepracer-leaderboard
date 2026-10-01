@@ -10,7 +10,7 @@
 > 웹·DB 서버(Lightsail) 쪽은 [server-access.md](server-access.md), 노트북 워커 운영은
 > [operations.md](operations.md)를 본다.
 >
-> 최종 갱신: 2026-08-01
+> 최종 갱신: 2026-09-10
 
 ---
 
@@ -401,15 +401,25 @@ scp -i ~/.ssh/drfc-worker-key.pem ~/deepracer-for-cloud/run.env ~/deepracer-for-
 
 | 설정 | 값 | 의미 |
 |---|---|---|
-| `DR_WORLD_NAME` | Vegas_track | 대회 트랙 |
+| `DR_WORLD_NAME` | reInvent2019_track | 대회 트랙 |
 | `DR_RACE_TYPE` | TIME_TRIAL | 타임트라이얼 |
 | `DR_EVAL_NUMBER_OF_TRIALS` | 3 | 3바퀴 |
 | `DR_EVAL_CHECKPOINT` | best | 제출 모델의 best 체크포인트로 평가 |
-| `DR_EVAL_OFF_TRACK_PENALTY` | 5.0 | 트랙 이탈 패널티 |
+| `DR_EVAL_OFF_TRACK_PENALTY` | 3.0 | 트랙 이탈 패널티 (2026-08-01에 5.0에서 낮춤) |
+| `DR_EVAL_MAX_RESETS` | 15 | 이탈 후 최대 재시작 횟수 (2026-08-01에 100에서 낮춤) |
 | `DR_EVAL_COLLISION_PENALTY` | 5.0 | |
 | `DR_EVAL_SAVE_MP4` | True | 영상 저장 (리더보드에 필요) |
 | `DR_LOCAL_S3_MODEL_PREFIX` | rl-deepracer-sagemaker | 워커 코드가 이 경로를 읽는다 |
 | `DR_SIMAPP_VERSION` | 6.0.4-**cpu** | CPU 전용 이미지. GPU가 필요 없다는 근거 |
+
+> ⚠️ **이 표는 사본이고, 진짜 값은 각 평가 서버의 `run.env`에 있다.** 결정 기록은
+> [spec.md](../specs/001-online-virtual-evaluation/spec.md) §8이다. 2026-08-01에 이탈 패널티와
+> 최대 리셋을 낮췄을 때 이 표만 갱신되지 않아, 2026-09-07 참가자 기록 조사에서 트랙 이름까지
+> 틀린 채로 남아 있는 것이 드러났다. **표를 믿지 말고 서버에서 직접 확인한다.**
+>
+> ```bash
+> grep -E "DR_WORLD_NAME|DR_EVAL_" ~/deepracer-for-cloud/run.env
+> ```
 
 ### 7.4 MinIO 이미지 버전 고정
 
@@ -686,8 +696,8 @@ UPDATE submissions SET status='queued', worker_id=NULL, started_at=NULL WHERE id
 
 ### 8.8 예비 워커 — 노트북 (2026-08-01 결정)
 
-**평상시 구성은 EC2 워커 1개다.** 10팀 기준 하루 최악 50건인데 평가 1건이 약 8분이라
-6시간 반이면 소화된다. 노트북은 **꺼두었다가 필요할 때만 켜는 예비 워커**로 둔다.
+**평상시 구성은 EC2 워커 1개다.** 10팀 기준 하루 최악 30건인데 평가 1건이 약 8분이라
+4시간이면 소화된다. 노트북은 **꺼두었다가 필요할 때만 켜는 예비 워커**로 둔다.
 
 **켤 만한 상황**: 제출 마감일처럼 몰릴 때, EC2에 문제가 생겼을 때, 스팟 용량이 없어
 인스턴스가 안 뜰 때.
@@ -815,7 +825,7 @@ journalctl -u drfc-worker --since today > ~/worker-today.log
 **받는 명령** (노트북 WSL에서 실행. `<사용자>`는 Windows 사용자명)
 
 ```bash
-rsync -avz -e "ssh -i ~/drfc-worker-key.pem" ubuntu@100.93.165.104:/home/ubuntu/spg-deepracer-leaderboard/storage/eval_logs/ /mnt/c/Users/<사용자>/drleader-backup/eval_logs/
+rsync -avz -e "ssh -i ~/.ssh/drfc-worker-key.pem" ubuntu@100.93.165.104:/home/ubuntu/spg-deepracer-leaderboard/storage/eval_logs/ /mnt/c/Users/<사용자>/drleader-backup/eval_logs/
 ```
 
 `rsync`라서 **여러 번 돌려도 새로 생긴 것만 받는다.** 매번 전체를 다시 받지 않는다.
@@ -823,13 +833,13 @@ rsync -avz -e "ssh -i ~/drfc-worker-key.pem" ubuntu@100.93.165.104:/home/ubuntu/
 `rsync`가 없으면 `scp`로도 된다(매번 전부 다시 받는다).
 
 ```bash
-scp -i ~/drfc-worker-key.pem -r ubuntu@100.93.165.104:/home/ubuntu/spg-deepracer-leaderboard/storage/eval_logs /mnt/c/Users/<사용자>/drleader-backup/
+scp -i ~/.ssh/drfc-worker-key.pem -r ubuntu@100.93.165.104:/home/ubuntu/spg-deepracer-leaderboard/storage/eval_logs /mnt/c/Users/<사용자>/drleader-backup/
 ```
 
 **워커 실행 로그도 함께 남기려면** (사고 조사용. 저널은 인스턴스를 없애면 사라진다)
 
 ```bash
-ssh -i ~/drfc-worker-key.pem ubuntu@100.93.165.104 'journalctl -u drfc-worker --no-pager' > /mnt/c/Users/<사용자>/drleader-backup/worker-journal-$(date +%F).log
+ssh -i ~/.ssh/drfc-worker-key.pem ubuntu@100.93.165.104 'journalctl -u drfc-worker --no-pager' > /mnt/c/Users/<사용자>/drleader-backup/worker-journal-$(date +%F).log
 ```
 
 > **주소는 Tailscale IP(`100.93.165.104`)를 쓴다.** 스팟 인스턴스는 중지·재시작할 때마다 공인 IP가
@@ -846,6 +856,276 @@ ssh -i ~/drfc-worker-key.pem ubuntu@100.93.165.104 'journalctl -u drfc-worker --
 **자동화하지 않은 이유**: `eval_logs`는 순위에 영향이 없는 진단 자료다. 잃어도 대회는 굴러가므로
 매일 도는 백업에 넣어 실패 지점을 하나 더 만들 이유가 없다. 대신 **인스턴스를 없애는 절차(§9.3,
 §10)에 이 명령을 넣어뒀다.** 진짜 잃을 수 있는 순간은 그때뿐이다.
+
+### 8.11 인스턴스가 저절로 중지됐을 때 — 원인 확인 (2026-09-10 추가)
+
+> 스팟 인스턴스가 로그 한 줄 없이 중지된 일이 있어 정리한 절차다. **조사하는 동안에는 아무것도
+> 고치지 않는다** — 아래 ①의 두 행동은 되돌릴 수 없다.
+
+**로그가 없는 게 아니라 못 읽는 것이다.** 워커 저널은 EBS 디스크에 그대로 남아 있지만 인스턴스가
+꺼져 있어 들어가 볼 수 없다. 그래서 **원인은 인스턴스 바깥(AWS가 남긴 기록)에서 먼저 찾고**,
+인스턴스가 다시 뜬 뒤에 안쪽 저널로 시각을 맞춰본다.
+
+#### ① 하지 말 것 — 둘 다 되돌릴 수 없다
+
+| 하지 말 것 | 이유 (AWS 문서) |
+|---|---|
+| **스팟 요청 취소** | 요청을 취소하면 **중지 상태의 인스턴스가 종료(terminate)된다.** 디스크와 `eval_logs`(§8.10)가 함께 사라진다 |
+| **루트 볼륨 분리** ("디스크만 떼서 로그를 보자") | 분리된 채로 EC2가 재시작을 시도하면 **시작에 실패하고 인스턴스를 종료한다** |
+
+#### ② 원인 코드 두 개를 본다 (콘솔)
+
+**가) 인스턴스의 상태 전환 사유**
+
+> EC2 → 인스턴스 → `drfc-worker` 선택 → 아래 첫 번째 탭(세부 정보) → **State transition reason**(상태 전환 사유)
+
+콘솔 언어에 따라 표기가 조금 다르다. `Server.…` 또는 `Client.…`로 시작하는 코드가 적힌 칸을 찾는다.
+
+**나) 스팟 요청의 상태**
+
+> EC2 → 왼쪽 메뉴 **스팟 요청** → 해당 요청 선택 → **상태(Status)**
+
+#### ③ 두 코드로 판정한다
+
+| 상태 전환 사유 | 스팟 요청 상태 | 무슨 일인가 | 다음 |
+|---|---|---|---|
+| `Server.SpotInstanceShutdown` | `instance-stopped-no-capacity` | **AWS가 용량이 필요해 회수했다.** 가장 흔한 경우 | ④ |
+| `Server.SpotInstanceShutdown` | `instance-stopped-by-price` | 스팟 가격이 최대 가격을 넘어 회수. §1.1대로 최대 가격을 비워뒀다면 드물다 | ④ |
+| `Client.UserInitiatedShutdown` | `instance-stopped-by-user` | **누군가 콘솔·API로 중지했다** | ⑤에서 누가 했는지 확인. 자동으로 다시 켜지지 않는다 — "인스턴스 시작"을 눌러야 한다(§9.2) |
+| `Client.InstanceInitiatedShutdown` | `instance-stopped-by-user` | **서버 안에서 `shutdown`·`poweroff`가 실행됐다** | "인스턴스 시작" 후 ⑥에서 누가 명령을 냈는지 확인 |
+| `Server.ScheduledStop` | — | AWS 하드웨어 교체에 따른 예약 중지 | AWS Health 대시보드에 예정 이벤트가 있었는지 본다 |
+
+> **스팟 요청 상태만 보면 틀린다.** AWS는 "콘솔에서 누가 중지함"과 "서버 안에서 shutdown 명령이
+> 실행됨"을 **`instance-stopped-by-user` 한 코드로 묶는다.** 두 경우는 조사할 곳이 전혀 다르므로
+> (CloudTrail vs 서버 저널) 인스턴스의 상태 전환 사유를 함께 봐야 갈린다.
+
+#### ④ AWS가 회수한 경우 — 기다리는 것 말고 할 수 있는 게 없다
+
+| 사실 (AWS 문서) | 운영상 의미 |
+|---|---|
+| **중단된 스팟 인스턴스는 EC2만 다시 켤 수 있다** | "인스턴스 시작"을 눌러도 `You can't start the Spot Instance '...' because there is no available Spot capacity.`로 거절된다(2026-09-10 실제로 겪음). 기다리거나 §8.12로 옮긴다 |
+| **같은 가용 영역·같은 인스턴스 유형**에 용량이 생기면 자동으로 켠다 | 켜지면 systemd가 워커를 띄우고, 평가 중이던 제출은 자동으로 대기열로 돌아간다(§8.6, §8.7) |
+| 중지 상태에서 **인스턴스 유형은 바꿀 수 없다** | "m7i 용량이 없으니 m6i로 바꾸자"가 안 된다 |
+| 중지 중에는 **EBS 요금만** 나간다 | 기다리는 비용은 하루 약 430원(§9.1) |
+
+**언제 돌아올지는 알 수 없다.** 대회 중이라 큐가 쌓이면 기다리지 말고 노트북 예비 워커를 켠다(§8.8).
+이때 평가 도중 멈춘 제출은 **EC2의 `worker_id`로 `running`에 갇혀 있다.** 노트북 워커는 다른
+`worker_id`라 35분이 지나야 풀어주므로, 급하면 §8.7의 SQL로 직접 되돌린다.
+
+**기다릴 수 없으면** 디스크를 AMI로 떠서 온디맨드(또는 다른 유형의 스팟)로 옮긴다 — §8.12.
+
+#### ⑤ 누가 중지했는지 — CloudTrail
+
+> CloudTrail → **이벤트 기록(Event history)** → 조회 속성 **리소스 이름** = 인스턴스 ID(`i-…`)
+
+| 보이는 것 | 뜻 |
+|---|---|
+| `StopInstances` | 사람이나 자동화가 API로 중지했다. **사용자 이름** 칸에 누구인지 나온다 |
+| `StopInstances`가 없다 | API로 끈 게 아니다 — AWS 회수이거나 서버 안에서 종료한 것(③으로 갈린다) |
+
+이벤트 기록은 별도 설정 없이 **최근 90일**치를 보여준다.
+
+> **`BidEvictedEvent`로 찾으라는 글이 많은데, 이 판정에 쓰지 않는다.** AWS 문서상 그 이벤트는
+> 스팟이 **종료(terminate)** 됐을 때의 기록이다. 이 서버의 중단 동작은 **중지**(§1.1)라서 찍힌다고
+> 기대할 근거가 없다. 회수 여부는 ③의 `Server.SpotInstanceShutdown`으로 판정한다.
+
+#### ⑥ 인스턴스가 다시 뜬 뒤 — 서버 안쪽 기록
+
+**AWS 기록과 서버 저널의 시각은 UTC다.** 한국 시각은 +9시간.
+
+이전 부팅의 저널이 남아 있는지부터 본다. 목록에 `-1`이 있어야 한다.
+
+```bash
+journalctl --list-boots --no-pager | tail -3
+```
+
+꺼지기 직전의 마지막 기록. 종료 절차가 시작된 시각을 ③·⑤의 시각과 맞춰본다.
+
+```bash
+journalctl -b -1 -n 60 --no-pager
+```
+
+**누가 껐는지** 단서를 추린다. `sudo`로 실행된 종료 명령이 보이면 서버 안에서 끈 것이고,
+`Power key`가 보이면 보통 바깥(AWS·콘솔)에서 종료 신호를 보낸 것이다.
+
+```bash
+journalctl -b -1 --no-pager | grep -iE "COMMAND=.*(shutdown|poweroff|halt)|power key"
+```
+
+그 시각에 워커가 평가 중이었는지는 §8.9의 명령으로 본다.
+
+```bash
+journalctl -u drfc-worker -b -1 -n 50 --no-pager
+```
+
+**꺼진 직후라면 서버에 들어가지 않고도** 콘솔 출력을 볼 수 있다.
+
+> 인스턴스 선택 → **작업** → **모니터링 및 문제 해결** → **시스템 로그 가져오기**
+
+AWS는 이 출력을 **마지막 출력 뒤 최소 1시간, 최근 64KB만** 보관한다고 보장한다. 몇 시간이 지났으면
+기대하지 않는다.
+
+#### (선택) 명령으로 한 번에 보기 — AWS CloudShell
+
+운영자 PC에는 AWS CLI가 없고, 평가 서버에는 자격증명을 두지 않는다(§7.5). 대신 AWS 콘솔 위쪽의
+**CloudShell** 아이콘을 누르면 로그인한 계정 권한으로 CLI가 바로 열린다(서울 리전 지원).
+
+```bash
+aws ec2 describe-instances --region ap-northeast-2 --filters Name=tag:Name,Values=drfc-worker --query 'Reservations[].Instances[].{ID:InstanceId,State:State.Name,Code:StateReason.Code,Reason:StateTransitionReason,AZ:Placement.AvailabilityZone}' --output table
+```
+
+아래 명령들의 `<인스턴스ID>`에 위에서 나온 `ID`를 넣는다.
+
+```bash
+aws ec2 describe-spot-instance-requests --region ap-northeast-2 --filters Name=instance-id,Values=<인스턴스ID> --query 'SpotInstanceRequests[].{State:State,Status:Status.Code,Updated:Status.UpdateTime}' --output table
+```
+
+```bash
+aws cloudtrail lookup-events --region ap-northeast-2 --lookup-attributes AttributeKey=ResourceName,AttributeValue=<인스턴스ID> --max-results 20 --query 'Events[].{Time:EventTime,Event:EventName,User:Username}' --output table
+```
+
+```bash
+aws ec2 get-console-output --region ap-northeast-2 --instance-id <인스턴스ID> --output text | tail -40
+```
+
+> 전부 **조회** 명령이다. CloudShell에서 `cancel-spot-instance-requests`, `terminate-instances`,
+> `stop-instances`는 치지 않는다(①).
+
+#### (선택) 다음부터는 메일이 오게 하기
+
+지금 구성은 회수돼도 아무도 모른다. EventBridge 규칙 두 개를 SNS 주제(이메일 구독)로 보내면 된다.
+
+| 규칙 | 이벤트 패턴 | 언제 오나 |
+|---|---|---|
+| 회수 예고 | `{"source": ["aws.ec2"], "detail-type": ["EC2 Spot Instance Interruption Warning"]}` | 회수 **2분 전** |
+| 중지 발생 | `{"source": ["aws.ec2"], "detail-type": ["EC2 Instance State-change Notification"], "detail": {"state": ["stopped"]}}` | 원인과 무관하게 **중지되는 순간** |
+
+> **첫 번째만 걸면 부족하다.** AWS는 회수 예고를 "best effort"로만 보낸다고 명시하고, 사람이 끈 경우나
+> 서버 안에서 종료한 경우에는 애초에 오지 않는다. 두 번째 규칙이 "원인 불문 꺼졌다"를 잡는다.
+
+### 8.12 스팟 용량이 없을 때 — 온디맨드로 옮기기 (2026-09-10 추가)
+
+> 스팟이 회수된 뒤 "인스턴스 시작"을 누르자
+> `You can't start the Spot Instance '...' because there is no available Spot capacity.`가 떴고,
+> 용량이 언제 돌아올지 알 수 없었다. **스팟 인스턴스를 온디맨드로 "변경"하는 기능은 없다.**
+> 지금 디스크를 AMI로 떠서 온디맨드 인스턴스로 새로 띄운다.
+
+**요금이 3배 넘게 오른다.** 급한 기간에만 쓰고, 스팟 용량이 돌아오면 같은 방법으로 되돌아가는
+것을 전제로 한다.
+
+| 구매 옵션 | 시간당 | 한 달 24시간 (EBS 1.3만원 별도) |
+|---|---|---|
+| 스팟 (§1.1) | $0.0699 | 약 7.2만원 |
+| 온디맨드 | **약 $0.25 (추정)** | **약 26만원** |
+
+> 온디맨드 요금은 §1.1의 "스팟 = 온디맨드의 약 28%"에서 역산한 값이다. **정확한 값은 3번의 인스턴스
+> 유형 선택 화면에 표시되는 온디맨드 요금으로 확인한다.**
+
+#### 왜 순서가 중요한가 — 옛 스팟이 되살아나면 두 대가 충돌한다
+
+- 스팟 요청이 **영구**라서, 요청이 살아 있으면 용량이 돌아오는 순간 EC2가 옛 인스턴스를 **자동으로 켠다**(§8.11 ④).
+- AMI로 복제한 새 서버에는 **Tailscale 신원 파일(`/var/lib/tailscale`)까지 똑같이** 들어 있다. 두 대가
+  함께 켜지면 **같은 `100.93.165.104`를 두고 충돌해** 둘 다 DB에 제대로 붙지 못한다. Tailscale 관리
+  콘솔에는 `Duplicate node key`로 표시된다.
+- 그래서 **AMI가 완성된 것을 확인한 뒤, 새 서버를 띄우기 전에** 스팟 요청을 취소한다. 취소하면 옛
+  인스턴스는 종료되지만, 방금 뜬 AMI가 그 디스크의 마지막 상태를 전부 담고 있어 잃는 것이 없다.
+
+> "새 서버를 먼저 띄워 확인한 뒤 옛 것을 취소"가 더 안전해 보이지만, 그 사이 스팟 용량이 돌아오면
+> 위 충돌이 난다. 옛 디스크는 AMI로 이미 보존됐으므로 옛 인스턴스를 남겨둘 이유가 없다. 만일을 위해
+> **§8.5에서 떠둔 기존 AMI는 이 절차가 끝날 때까지 지우지 않는다.**
+
+#### 0. 원인 코드부터 적어둔다 — 1분이면 된다
+
+2번에서 옛 인스턴스가 종료되면 콘솔 목록에서 곧 사라져 **상태 전환 사유를 더는 볼 수 없다.**
+§8.11 ②의 두 코드를 먼저 적어둔다. CloudTrail 기록(§8.11 ⑤)은 90일간 남으니 나중에 봐도 된다.
+
+#### 1. 지금 디스크로 AMI를 뜬다
+
+> EC2 → 인스턴스 → `drfc-worker`(중지됨) 선택 → **작업** → **이미지 및 템플릿** → **이미지 생성**
+
+- 이미지 이름: `drfc-worker-YYYYMMDD`
+- **이미 중지된 인스턴스라 재부팅 옵션은 영향이 없다.** §8.5가 재부팅을 요구하는 이유(쓰이다 만
+  파일)는 종료 절차를 거쳐 꺼진 디스크에는 해당하지 않는다.
+- EC2 → **AMI**에서 상태가 **사용 가능(available)** 이 될 때까지 기다린다. 몇 분에서 수십 분 걸린다.
+- 이 AMI에는 `eval_logs`와 워커 저널까지 들어 있다. §9.3·§10은 "종료 전에 `eval_logs`를 받아둔다"를
+  요구하지만 인스턴스가 꺼져 있어 할 수 없다. 대신 **새 서버에 그대로 따라오므로 잃지 않는다.**
+
+#### 2. AMI가 "사용 가능"인 것을 눈으로 확인한 뒤에만 스팟 요청을 취소한다
+
+> EC2 → 왼쪽 메뉴 **스팟 요청** → 해당 요청 선택 → **요청 취소**
+
+- **옛 인스턴스가 종료된다. 되돌릴 수 없다.**
+- 취소한 뒤 인스턴스 목록에서 옛 인스턴스가 **종료됨**으로 바뀌었는지 확인한다. 중지됨으로 남아
+  있으면 직접 종료한다.
+
+#### 3. AMI로 온디맨드 인스턴스를 띄운다
+
+> EC2 → **AMI** → 1번 이미지 선택 → **AMI로 인스턴스 시작**
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| 이름 | `drfc-worker` | §8.11의 CloudShell 명령이 이 이름으로 찾는다 |
+| 인스턴스 유형 | **m7i.xlarge** | 평가 환경을 바꾸지 않는다. **여기서 온디맨드 시간당 요금을 확인한다** |
+| 키 페어 | **§1.1에서 만든 기존 키 페어** | 새로 만들면 `~/.ssh/drfc-worker-key.pem`으로 못 들어간다 |
+| 보안 그룹 | **기존 보안 그룹 선택** | SSH(22)·내 IP만(§1.1). 새로 만들면 규칙을 다시 잡아야 한다 |
+| 스토리지 | 100 GiB gp3 (AMI 값 그대로) | 줄이지 않는다 |
+| 고급 세부 정보 → 구매 옵션 | **스팟 인스턴스를 체크하지 않는다** | 체크하지 않으면 온디맨드다 |
+
+용량 부족(`InsufficientInstanceCapacity`)으로 실패하면 **네트워크 설정 → 서브넷**에서 **다른 가용
+영역**을 골라 다시 시작한다. 워커는 Tailscale로만 통신하므로 가용 영역이 바뀌어도 상관없다.
+
+#### 4. 뜬 뒤 확인
+
+§9.3 "되살리는 절차"의 표를 그대로 따른다. 이번 경우 특히 볼 것:
+
+| 확인 | 명령 | 기대값 |
+|---|---|---|
+| Tailscale 주소 | `tailscale ip -4` | **`100.93.165.104` 그대로.** 옛 인스턴스가 종료돼 같은 신원으로 붙는다. 다르면 §3.4와 [handover.md](handover.md) §0을 고친다 |
+| DB까지 닿는가 | §4.3 | 연결 성공 |
+| 워커 | `sudo systemctl status drfc-worker` | `active (running)` |
+| 워커 ID | `journalctl -u drfc-worker -n 20 --no-pager` | `워커 시작 (worker_id=ip-172-31-...)`가 **옛 서버와 다른 값**. 호스트명이 사설 IP에서 만들어지기 때문이다 |
+| MinIO | `docker stack ls` | `s3` 있음 |
+
+> Tailscale이 안 붙어 SSH가 안 되면 콘솔의 새 공인 IP로 들어간다. 보안 그룹이 "내 IP"만 허용하므로
+> 그 사이 집·학교 IP가 바뀌었다면 보안 그룹의 SSH 규칙부터 고친다.
+
+#### 5. 갇힌 제출을 확인한다
+
+옛 서버가 평가 도중 회수됐다면 그 제출은 **옛 `worker_id`로 `running`에 남아 있다.** 새 서버는
+호스트명이 달라 **다른 워커로 취급**되므로 §8.7의 "내 것은 즉시 회수"가 적용되지 않는다.
+
+| 새 워커가 시작한 순간 그 제출의 `started_at`이 | 결과 |
+|---|---|
+| 35분 넘게 지났다 | 시작하면서 **자동으로 대기열로 돌아간다** |
+| 35분이 안 됐다 | **다시는 자동으로 풀리지 않는다**(`recover_stale_running`은 워커가 시작할 때만 돈다). §8.7의 SQL로 직접 되돌린다 |
+
+§8.7의 `SELECT`로 `running`이 남았는지 한 번 본다.
+
+#### 6. 정리 (급하지 않다)
+
+- 새 서버에서 **평가 1건이 성공한 뒤**(§8.4) 필요하면 AMI를 새로 뜨고, 옛 AMI는 §8.5의 두 단계
+  (등록 취소 → 스냅샷 삭제)로 지운다.
+- Tailscale 관리 콘솔에 `Duplicate node key`가 보이면 옛 인스턴스가 살아 있는 것이다. 종료됐는지
+  다시 확인한다.
+
+#### 다시 스팟으로 돌아갈 때
+
+순서가 반대여도 된다. **온디맨드는 저절로 켜지지 않기 때문이다.**
+
+1. 평가 중이 아닐 때(`docker stack ls`에 `deepracer-eval-0` 없음) 온디맨드 인스턴스를 **중지**한다
+2. AMI를 뜬다
+3. AMI로 시작하면서 §1.1의 스팟 설정(스팟·영구·중지)을 지정한다
+4. 새 스팟 서버를 4번 표로 확인한 뒤 온디맨드 인스턴스를 **종료**한다 — 중지 상태로 있는 동안에는
+   켜지지 않으므로 Tailscale 충돌이 없다
+
+#### 대안 — 온디맨드 대신 다른 유형의 스팟
+
+용량 부족은 **특정 가용 영역의 특정 유형**에 대한 것이다. 같은 4 vCPU / 16 GiB인 `m6i.xlarge`,
+`m7a.xlarge`, `m6a.xlarge` 같은 유형은 스팟 여유가 있을 수 있어 요금을 지킬 수 있다. 절차는 위와
+같고 3번에서 유형과 구매 옵션(§1.1의 스팟 설정)만 다르다.
+
+- **이름에 `g`가 붙은 유형(`m7g` 등)은 ARM이라 이 AMI(x86)로 뜨지 않는다.**
+- 하드웨어가 바뀌면 평가 1건 시간이 달라지므로 §8.4의 실측을 다시 한다.
 
 ---
 

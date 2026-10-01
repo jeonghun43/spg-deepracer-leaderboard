@@ -25,7 +25,11 @@ class Settings(BaseSettings):
     storage_dir: Path = BASE_DIR / "storage"
 
     # spec.md에서 확정한 규칙
-    daily_submission_limit: int = 5
+    # 하루 제출 한도만 .env(DAILY_SUBMISSION_LIMIT)로 덮어쓸 수 있게 열어 뒀다.
+    # 대회 중에 대기열이 밀리면 한도를 조여야 하는데, 그때마다 코드를 배포하는 것은
+    # 위험하기 때문이다. 나머지 규칙은 바꿀 일이 없어 코드에만 둔다.
+    # (2026-09-02: 5회 → 3회로 변경)
+    daily_submission_limit: int = 3
     online_eval_laps: int = 3
     # 참가자에게 보여줄 예상 대기 시간 계산에 쓰는 평가 1건당 소요 시간(분).
     # GPU 없는 노트북 기준 실측값이며, 서버를 바꾸면 재측정해서 갱신해야 한다.

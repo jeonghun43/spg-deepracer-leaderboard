@@ -45,6 +45,10 @@ services:
       # 아래 둘은 선택값. 없으면 앱 기본값(5회 / 15분)을 쓴다.
       ADMIN_LOGIN_MAX_ATTEMPTS: ${ADMIN_LOGIN_MAX_ATTEMPTS:-5}
       ADMIN_LOGIN_LOCKOUT_MINUTES: ${ADMIN_LOGIN_LOCKOUT_MINUTES:-15}
+      # 팀당 하루 제출 한도. 대회 중 대기열이 밀리면 서버 .env에서 값을 바꾸고
+      # `up -d`만 하면 되도록 환경변수로 뺐다 (코드 배포 없이 조정 가능).
+      # `restart`로는 반영되지 않는다 — 컨테이너를 다시 만들어야 한다.
+      DAILY_SUBMISSION_LIMIT: ${DAILY_SUBMISSION_LIMIT:-3}
       # 값이 설정되면 워커가 HTTP로 모델을 받고 영상을 올리는 방식으로 동작한다.
       WORKER_TOKEN: ${WORKER_TOKEN:-}
     depends_on:
