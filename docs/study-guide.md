@@ -127,7 +127,7 @@ worker/run.py 가 5초마다 폴링
 | `app/main.py` | 앱 조립. 미들웨어·라우터·정적파일 마운트 | 없음 (가장 먼저) |
 | `app/config.py` | 환경변수 → 설정 객체 | `.env` (비밀값은 가리고) |
 | `app/db.py` | 엔진·세션 팩토리·ORM Base | `main.py` |
-| `app/models.py` | 테이블 6개 정의, 관계, 제약 | `migrations/versions/*.py` |
+| `app/models.py` | 테이블 9개 정의, 관계, 제약 | `migrations/versions/*.py` |
 | `app/deps.py` | 로그인 검사 의존성 | `routers/auth.py` |
 | `app/routers/auth.py` | 팀 로그인/로그아웃 | `deps.py`, `security.py` |
 | `app/routers/submissions.py` | 제출 화면·업로드 처리 | `quota.py`, `storage_paths.py` |

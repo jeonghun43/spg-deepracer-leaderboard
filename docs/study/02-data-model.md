@@ -116,6 +116,10 @@ best_progress_percent: Mapped[float | None] = mapped_column(nullable=True)
 
 ## 2. 테이블 7개 — 무엇을, 왜 이렇게 쪼갰나
 
+> 2026-10-04에 평가 서버 자동 켜기·끄기용 표 2개(`autopilot_state`, `autopilot_events`)가 더해져
+> 지금은 9개다. 이 절은 대회 데이터를 담는 7개만 다룬다. 새 두 표를 왜 이렇게 만들었는지는
+> [worker-auto-start-stop-plan.md](../../specs/001-online-virtual-evaluation/worker-auto-start-stop-plan.md) §3에 있다.
+
 ```
 Season (시즌/대회)
   └─1:N─> Team (참가팀)
@@ -872,7 +876,8 @@ CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --
 
 **장점**: 배포 절차가 단순하다. `docker compose up -d --build` 한 줄.
 **단점**: 웹 컨테이너를 여러 개로 늘리면 **동시에 마이그레이션을 실행**해 충돌한다.
-지금은 1개뿐이라 안전하다. (`docker-compose.prod.yml`도 `web` 하나다.)
+지금은 1개뿐이라 안전하다. (`docker-compose.prod.yml`도 `web` 하나다. 2026-10-04에 붙은 `autopilot`은
+같은 이미지지만 `command`로 `CMD`를 덮어써 마이그레이션을 돌리지 않는다 — 표는 `web`이 만든다.)
 
 ---
 

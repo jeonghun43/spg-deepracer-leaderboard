@@ -204,3 +204,53 @@ class EvaluationResult(Base):
     completed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     submission: Mapped["Submission"] = relationship(back_populates="result")
+
+
+class AutopilotState(Base):
+    """평가 서버 자동 켜기·끄기의 스위치와 마지막으로 본 상태. 항상 id=1 한 줄이다
+    (worker-auto-start-stop-plan.md §3.1).
+
+    스위치를 .env가 아니라 DB에 두는 이유: 마감 직전에 급하게 바꾸는 값이라, 배포나 재시작 없이
+    다음 판단 주기(1분)에 바로 반영돼야 한다(명세서 S10).
+    """
+
+    __tablename__ = "autopilot_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    # 기본값이 꺼짐인 이유: 배포 직후 운영자가 확인하기 전에 서버가 저절로 켜지고 꺼지면 안 된다.
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    enabled_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled_changed_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # 아래는 autopilot 컨테이너가 채운다. 관리자 화면은 AWS를 직접 부르지 않고 이 값을 보여 준다
+    # (AWS 키를 web 컨테이너에 넣지 않기 위해서다).
+    instance_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    instance_state_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 인스턴스의 사설 DNS 이름에서 얻은 워커 ID. 관리자 화면이 이 워커의 하트비트를 보여 준다.
+    target_worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_start_requested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # "대기 중 제출이 있는데 대상 워커가 살아 있지 않은" 상태가 처음 보인 시각. 그 상태가 풀리면 비운다.
+    # manual_attention·start_timeout 알림의 "이번 사건"을 구분하는 기준이다(plan.md §3.1).
+    attention_since: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AutopilotEvent(Base):
+    """자동 켜기·끄기 사건 기록 겸 디스코드 알림 대기열 (plan.md §3.2).
+
+    알림을 바로 보내지 않고 여기에 먼저 적는다. 평가 서버는 웹훅 주소를 모르고(비밀값을 웹 서버
+    한 곳에만 둔다), 디스코드가 잠깐 안 되더라도 다음 주기에 다시 보낼 수 있기 때문이다.
+    """
+
+    __tablename__ = "autopilot_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # 최근 기록 조회와 "같은 종류가 언제 마지막으로 났나"(중복 방지) 조회가 모두 시각 순이다.
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(30))
+    # "web"(autopilot·관리자) 또는 평가 서버의 워커 ID
+    source: Mapped[str] = mapped_column(String(100))
+    # 사람이 읽는 한 줄. 참가자 정보와 비밀값을 넣지 않는다(대기 건수·시각 정도).
+    message: Mapped[str] = mapped_column(String(500))
+    notified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

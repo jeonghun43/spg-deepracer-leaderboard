@@ -39,3 +39,14 @@ def touch_heartbeat(db: Session, worker_id: str) -> None:
     else:
         heartbeat.last_seen_at = now
     db.commit()
+
+
+def get_worker_last_seen(db: Session, worker_id: str) -> dt.datetime | None:
+    """특정 워커의 마지막 생존 신호 시각. 없으면 None.
+
+    평가 서버 자동 켜기(app/autopilot.py)와 관리자 자동화 화면이 쓴다. 위의 get_worker_status는
+    **모든 워커 중 최신**을 보므로 쓰지 않는다 — 운영자 노트북의 워커가 살아 있어도 EC2는 켜야 한다
+    (worker-auto-start-stop.md Q2). 참가자 화면이 쓰는 get_worker_status는 그대로 둔다.
+    """
+    heartbeat = db.get(WorkerHeartbeat, worker_id)
+    return heartbeat.last_seen_at if heartbeat is not None else None

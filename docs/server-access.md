@@ -89,13 +89,14 @@ cd ~/drleader
 docker compose -f docker-compose.prod.yml ps
 ```
 
-정상이면 세 개가 모두 `Up`이다.
+정상이면 네 개가 모두 `Up`이다.
 
 | 서비스 | 하는 일 | 죽으면 |
 |---|---|---|
 | `caddy` | HTTPS 접수 → 웹으로 전달 | 사이트 접속 불가 |
 | `web` | 리더보드·로그인·제출 처리 | 사이트가 502 오류 |
 | `db` | 모든 데이터 저장 | 웹도 함께 동작 불가 |
+| `autopilot` | 평가 서버(EC2) 자동 켜기·디스코드 알림 (2026-10-04 추가, §5-1) | 사이트는 정상이다. 제출이 쌓여도 평가 서버가 **스스로 켜지지 않고**, 알림이 끊긴다 |
 
 `db`는 `(healthy)` 표시까지 나와야 정상이다.
 
@@ -117,7 +118,14 @@ docker compose -f docker-compose.prod.yml logs --tail 50 web
 docker compose -f docker-compose.prod.yml logs -f web
 ```
 
-서비스 이름을 빼면 세 개 전부 섞어서 보여준다.
+평가 서버 자동 켜기·디스코드 알림(`autopilot`)의 로그는 이렇게 본다. 1분에 한 번 판단하므로
+평소에는 조용하고, 켜기 요청·실패·알림 발송 실패가 있을 때만 줄이 늘어난다.
+
+```bash
+docker compose -f docker-compose.prod.yml logs -f autopilot
+```
+
+서비스 이름을 빼면 전부 섞어서 보여준다.
 
 ```bash
 docker compose -f docker-compose.prod.yml logs --tail 100
@@ -130,6 +138,7 @@ docker compose -f docker-compose.prod.yml logs --tail 100
 | 사이트가 안 열림 | `caddy` | `certificate obtained`(인증서 정상), `error` |
 | 접속은 되는데 오류 화면 | `web` | `Traceback`, `500` |
 | 데이터가 이상함 | `db` | `FATAL`, `could not` |
+| 제출이 쌓였는데 평가 서버가 안 켜짐 · 디스코드 알림이 안 옴 | `autopilot` | `켜기 요청 실패`, `EC2 상태 조회 실패`, `디스코드 발송 실패`, `AUTOPILOT_INSTANCE_ID가 설정되지 않았습니다` |
 
 ### 리소스 확인
 
@@ -313,6 +322,8 @@ cd ~/drleader && docker compose -f docker-compose.prod.yml ps && docker compose 
 | `POSTGRES_PASSWORD` · `SESSION_SECRET` · `SITE_DOMAIN` | 기동 실패 |
 | `ADMIN_LOGIN_PATH` (2026-08-03 추가) | 기동 실패 — 아래 참고 |
 
+평가 서버 자동 켜기·끄기용 키(2026-10-04 추가)는 **없어도 기동은 된다** — 그 기능만 쉰다. 넣는 법은 §5-1.
+
 `ADMIN_LOGIN_PATH`는 **관리자 로그인 폼이 열리는 비밀 경로**다. 값이 없을 때 기본값으로
 조용히 넘어가면 관리자 로그인이 다시 공개된 채 배포되므로, 일부러 기동을 막아 즉시 드러나게 했다
 ([admin-access-hardening.md](../specs/001-online-virtual-evaluation/admin-access-hardening.md)).
@@ -331,6 +342,103 @@ python3 -c "import secrets,string;a=string.ascii_lowercase+string.digits;print('
 
 **워커도 다시 띄워야 하나?** `worker/` 아래 코드를 고쳤을 때만 그렇다. 웹 화면(`app/`)만 고쳤다면
 노트북 워커는 건드리지 않아도 된다 — 서버와 워커는 별개 프로세스이고 위 명령은 서버만 바꾼다.
+
+---
+
+## 5-1. 평가 서버 자동 켜기·끄기 설정 (2026-10-04 추가)
+
+웹 서버의 `autopilot` 컨테이너가 1분마다 대기열을 보고, 제출이 있는데 평가 서버(EC2)가 꺼져 있으면
+**AWS API로 켠다.** 같은 컨테이너가 사건을 **디스코드 운영 채널로 알린다.** 끄기는 평가 서버가
+스스로 한다(평가 서버 쪽 설정은 worker-server-setup.md의 '자동 켜기·끄기' 절). 왜 이렇게 나눴는지는
+[worker-auto-start-stop-plan.md](../specs/001-online-virtual-evaluation/worker-auto-start-stop-plan.md) §0에 있다.
+평소 운영(스위치, 알림 대응)은 [operations.md](operations.md)의 "평가 서버 자동 켜기·끄기" 절을 본다.
+
+### 웹 서버 `.env`에 넣는 키
+
+| 키 | 비밀값? | 넘겨받는 서비스 | 내용 |
+|---|---|---|---|
+| `AUTOPILOT_INSTANCE_ID` | 아니다 | `autopilot`, `web` | 대상 평가 서버의 인스턴스 ID(`i-…`). 인스턴스를 새로 만들면 이 값만 바꾼다 |
+| `AUTOPILOT_REGION` | 아니다 | `autopilot` | 생략하면 `ap-northeast-2` |
+| `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` | **예** | **`autopilot`만** | 켜기 전용 IAM 사용자 `drleader-autopilot`의 액세스 키. 발급 절차는 worker-server-setup.md의 '자동 켜기·끄기' 절 |
+| `DISCORD_WEBHOOK_URL` | **예** | **`autopilot`만** | 운영 채널의 웹후크 주소. 아래 "디스코드 웹후크" |
+
+- **왜 AWS 키와 웹후크는 `autopilot`에만 넘기나**: `web`은 인터넷에 열려 있는 유일한 컨테이너다.
+  웹이 털려도 그 환경변수에 AWS 키가 없게 하려고, `docker-compose.prod.yml`이 이 키들을 `autopilot`에만
+  넘긴다. `web`은 관리자 화면에 "설정됨/설정되지 않음"을 보여 주려고 인스턴스 ID만 받는다.
+  그래서 `docker compose exec web env`에 AWS 키가 안 보이는 것이 **정상이다.**
+- **왜 키 권한이 "그 서버 하나를 켜는 것"뿐인가**: 키가 새더라도 최악의 결과가 "평가 서버가 켜져서
+  요금이 나간다"에 그치게 하려고다. 끄기·만들기·지우기 권한은 없다. **root 계정의 키는 절대 쓰지 않는다.**
+- **평가 서버(EC2)에는 이 키들을 넣지 않는다.** 평가 서버는 스스로 `poweroff`해서 꺼지므로 AWS 키가
+  필요 없고(CLAUDE.md §4 — 평가 서버에 실제 AWS 자격증명을 두지 않는다), 알림도 웹 서버가 대신 보낸다.
+- 키가 모두 비어 있어도 `autopilot` 컨테이너는 뜬다. 로그에 `AUTOPILOT_INSTANCE_ID가 설정되지 않았습니다`만
+  남기고 쉰다 — 이 기능을 아직 쓰지 않는 배포가 깨지지 않게 하려고다. 웹후크만 비어 있으면 알림은
+  로그로만 남고, 나중에 넣으면 **최근 24시간 안의** 못 보낸 알림만 몰아서 보낸다.
+
+### 처음 켤 때의 순서 — `.env`가 먼저다
+
+`.env`는 tar 전송에서 빠진다(§5). 그래서 **배포보다 서버 `.env` 수정이 먼저다.** 순서가 바뀌면 새
+`autopilot`이 키 없이 떠서 아무 일도 하지 않는다(그러다 키를 넣고 `up -d`하면 그때부터 동작한다).
+
+1. 서버에 접속해 `.env`를 연다: `nano ~/drleader/.env`
+2. 위 다섯 키를 붙여 넣는다. 형식은 저장소의 `.env.example`에 있다.
+   값은 **노트북에서 복사해 서버 편집기에 바로 붙여 넣는다** — 채팅·메모장·문서를 거치지 않는다.
+3. 넣었는지는 **값이 아니라 키 이름으로만** 확인한다.
+
+   ```bash
+   grep -oE '^(AUTOPILOT_[A-Z_]+|AWS_[A-Z_]+|DISCORD_WEBHOOK_URL)=' ~/drleader/.env
+   ```
+
+   다섯 줄이 나오면 된다. 값을 화면에 띄우는 `cat .env`는 쓰지 않는다 — 화면 공유·캡처로 새기 쉽다.
+4. §5의 ①~③대로 tar 전송 → `up -d --build`
+5. 확인
+
+   ```bash
+   cd ~/drleader && docker compose -f docker-compose.prod.yml ps && docker compose -f docker-compose.prod.yml logs --tail 20 autopilot
+   ```
+
+   `autopilot`이 `Up`이고, 로그에 `autopilot 시작 (… 디스코드=설정됨)`과 `종료 시 동작 확인: stop (정상)`이
+   보이면 된다. `종료 시 동작 확인 실패`가 보이면 IAM 정책의 `DescribeInstanceAttribute` 권한을 본다.
+6. 관리자 화면의 **평가 서버 자동화**(`/admin/autopilot`)에서 스위치를 켠다. 1분 안에 디스코드에
+   "자동화 스위치 변경"이 오면 웹후크까지 정상이다.
+
+**코드는 그대로이고 `.env`만 바꿨다면** `up -d`면 된다(`--build` 불필요). 컨테이너를 새 환경변수로
+다시 만든다. **`restart`로는 `.env`가 다시 읽히지 않는다.**
+
+```bash
+cd ~/drleader && docker compose -f docker-compose.prod.yml up -d
+```
+
+### 디스코드 웹후크 만들기
+
+웹후크 주소는 **비밀값이다.** 주소를 아는 사람은 누구나 그 채널에 글을 쓸 수 있다(운영자를 사칭한
+"서버를 지금 끄세요" 같은 글도 된다). 그래서 이 주소는 서버 `.env` 한 곳에만 둔다.
+
+1. 디스코드에서 운영 채널 이름 옆 톱니바퀴(**채널 편집**) — 또는 **서버 설정** — 로 들어간다
+2. **연동** → **웹후크** → **새 웹후크**
+3. 이름을 알아보기 쉽게 바꾼다(예: `평가 서버 알림`). 채널이 운영 채널인지 확인한다
+4. **웹후크 URL 복사** → 위 "처음 켤 때의 순서" 2번처럼 서버 `.env`의 `DISCORD_WEBHOOK_URL=` 뒤에 바로 붙여 넣는다
+
+🔒 **웹후크 URL을 채팅(Claude 포함)·문서·커밋·이슈·스크린샷에 붙이지 않는다.** 문서에 예시가 필요하면
+`<디스코드 채널 설정 → 연동 → 웹후크에서 복사>` 같은 자리표시를 쓴다. 커밋 전 검사(CLAUDE.md §4-1)도
+`discord.com/api/webhooks/`를 찾는다.
+
+### 새었을 때 — 폐기하고 다시 만든다
+
+웹후크 주소가 어디에든 붙여졌다면 **지우는 것보다 무효화가 먼저다.** 옛 웹후크를 디스코드에서 삭제하면
+그 주소는 즉시 쓸모가 없어진다. 문서·기록에 남은 옛 값은 그 뒤에 천천히 정리하면 된다.
+
+1. 디스코드 **채널 편집 → 연동 → 웹후크**에서 그 웹후크를 **삭제**한다
+2. **새 웹후크**를 만들어 URL을 복사한다(위 절차)
+3. 서버 `.env`의 `DISCORD_WEBHOOK_URL=` 값을 교체한다: `nano ~/drleader/.env`
+4. `cd ~/drleader && docker compose -f docker-compose.prod.yml up -d`
+5. 관리자 화면에서 스위치를 한 번 껐다 켜서 새 웹후크로 알림이 오는지 본다
+
+1~3 사이에 생긴 알림은 `디스코드 발송 실패: HTTP 404`로 로그에 남고 보내지 않은 상태로 남아 있다가,
+교체 뒤 다음 주기에 나간다(24시간 안의 것만). 관리자 화면의 최근 기록에는 그대로 보인다.
+
+**AWS 키가 새었을 때**도 같은 원리다: IAM 콘솔 → 사용자 `drleader-autopilot` → 보안 자격 증명에서
+그 액세스 키를 **비활성화** → 새 키 발급 → 서버 `.env`의 두 값 교체 → `up -d` → 로그에 `켜기 요청 실패`나
+`EC2 상태 조회 실패`가 없는지 확인 → 옛 키 삭제.
 
 ---
 
@@ -367,6 +475,7 @@ echo "여기에-위에서-복사한-공개키-한줄" >> ~/.ssh/authorized_keys
 cd ~/drleader                                                  # 프로젝트 폴더로
 docker compose -f docker-compose.prod.yml ps                   # 상태 확인
 docker compose -f docker-compose.prod.yml logs --tail 50 web   # 웹 로그
+docker compose -f docker-compose.prod.yml logs -f autopilot    # 평가 서버 자동 켜기·알림 로그
 docker compose -f docker-compose.prod.yml restart web          # 웹만 재시작
 docker compose -f docker-compose.prod.yml up -d                # 전체 복구
 free -h && df -h /                                             # 자원 확인
