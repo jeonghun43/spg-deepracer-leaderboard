@@ -51,6 +51,10 @@ services:
       DAILY_SUBMISSION_LIMIT: ${DAILY_SUBMISSION_LIMIT:-3}
       # 값이 설정되면 워커가 HTTP로 모델을 받고 영상을 올리는 방식으로 동작한다.
       WORKER_TOKEN: ${WORKER_TOKEN:-}
+      # 관리자 화면의 "평가 서버 자동화"가 "설정되지 않음"을 판단하는 데만 쓴다.
+      # **AWS 키와 디스코드 웹훅은 web에 넘기지 않는다** — 아래 autopilot에만 있다. 웹이 털려도
+      # 환경변수에 AWS 키가 없게 하기 위해서다(worker-auto-start-stop-plan.md §1.1).
+      AUTOPILOT_INSTANCE_ID: ${AUTOPILOT_INSTANCE_ID:-}
     depends_on:
       db:
         condition: service_healthy
@@ -60,6 +64,33 @@ services:
       - "8000"
     # 개인 프로젝트를 같은 서버에 얹더라도 대회 서비스가 메모리 부족으로 죽지 않게 상한을 둔다.
     mem_limit: 900m
+
+  # 평가 서버(EC2) 자동 켜기 + 디스코드 알림 (worker-auto-start-stop-plan.md §1).
+  # web과 같은 이미지에 명령만 바꿔 띄운다. 배포(tar → up -d --build)에 그대로 실려 가고,
+  # 의존성(boto3·httpx·SQLAlchemy)이 이미 들어 있다. 끄기는 평가 서버가 스스로 하므로 여기에는 없다.
+  autopilot:
+    build: .
+    command: python -m app.autopilot
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://drleader:${POSTGRES_PASSWORD}@db:5432/drleader
+      # 아래 값이 모두 비어도 컨테이너는 뜬다. 인스턴스 ID가 없으면 "설정되지 않음" 로그만 남기고
+      # 쉰다 — 이 기능을 쓰지 않는 배포가 이 서비스 때문에 깨지지 않게 한다.
+      AUTOPILOT_INSTANCE_ID: ${AUTOPILOT_INSTANCE_ID:-}
+      AUTOPILOT_REGION: ${AUTOPILOT_REGION:-ap-northeast-2}
+      # 켜기 전용 IAM 사용자(drleader-autopilot)의 키. 권한은 그 인스턴스 하나를 켜는 것과 조회뿐이다.
+      # Lightsail에는 IAM 역할을 붙일 수 없어 키를 쓴다(plan.md §5.3). **이 서비스에만** 넘긴다.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # 비밀값이다 — 알면 누구나 그 채널에 글을 쓸 수 있다. 비어 있으면 알림은 로그로만 남는다.
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+    depends_on:
+      # 표는 web이 기동하면서 alembic으로 만든다. autopilot이 먼저 떠서 표가 없으면 그 주기만
+      # 실패 로그를 남기고 다음 주기에 다시 본다(별도 처리 없음).
+      db:
+        condition: service_healthy
+    # 1분에 한 번 깨어나는 작은 프로세스다. 2GB 서버에서 web(900m)·caddy(256m)와 나눠 쓴다.
+    mem_limit: 150m
 
   caddy:
     image: caddy:2

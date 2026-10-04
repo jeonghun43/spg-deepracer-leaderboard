@@ -9,9 +9,12 @@ from app import admin_lockout
 from app.config import settings
 from app.db import get_db
 from app.deps import get_current_admin
+from app.autopilot_logic import EVENT_LABELS, SWITCH_CHANGED, status_label, worker_alive
 from app.models import (
     Account,
     AdminAccount,
+    AutopilotEvent,
+    AutopilotState,
     Season,
     SeasonStatus,
     Submission,
@@ -23,6 +26,7 @@ from app.render import templates
 from app.routers.submissions import DEFAULT_UPLOADS_PAUSED_MESSAGE
 from app.season_archive import archive_season
 from app.security import generate_password, hash_password, verify_password
+from app.worker_status import get_worker_last_seen
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 # 로그인 폼은 /admin 아래가 아니라 .env로 지정한 비밀 경로에 붙는다 (파일 끝에서 등록).
@@ -290,6 +294,86 @@ def set_visibility(
         season.hidden = action == "hide"
         db.commit()
     return RedirectResponse(f"/admin/seasons/{season_id}", status_code=303)
+
+
+# ── 평가 서버 자동 켜기·끄기 (worker-auto-start-stop-plan.md §4) ─────────────
+#
+# 이 화면은 AWS를 직접 부르지 않는다. autopilot 컨테이너가 1분마다 DB에 남긴 EC2 상태를 보여 준다.
+# AWS 키를 web 컨테이너에 넣지 않기 위해서다(plan.md §1.1).
+
+AUTOPILOT_RECENT_EVENTS = 20
+
+
+def _recent_autopilot_events(db: Session) -> list[AutopilotEvent]:
+    return list(
+        db.execute(
+            select(AutopilotEvent)
+            .order_by(AutopilotEvent.created_at.desc(), AutopilotEvent.id.desc())
+            .limit(AUTOPILOT_RECENT_EVENTS)
+        ).scalars()
+    )
+
+
+@router.get("/autopilot")
+def autopilot_page(request: Request, admin: AdminAccount = Depends(get_current_admin), db: Session = Depends(get_db)):
+    state = db.get(AutopilotState, 1)
+    worker_id = state.target_worker_id if state is not None else None
+    last_seen = get_worker_last_seen(db, worker_id) if worker_id else None
+    alive = worker_alive(
+        dt.datetime.now(tz=dt.timezone.utc), last_seen, settings.worker_heartbeat_stale_minutes
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin/autopilot.html",
+        {
+            "configured": bool(settings.autopilot_instance_id),
+            "instance_id": settings.autopilot_instance_id,
+            "state": state,
+            "enabled": bool(state.enabled) if state is not None else False,
+            "status_label": status_label(state.instance_state if state is not None else None, alive),
+            "worker_id": worker_id,
+            "worker_last_seen": last_seen,
+            "worker_alive": alive,
+            "events": _recent_autopilot_events(db),
+            "event_labels": EVENT_LABELS,
+        },
+    )
+
+
+@router.post("/autopilot")
+def set_autopilot(
+    action: str = Form(...),
+    admin: AdminAccount = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """자동화 스위치를 켜고(enable) 끈다(disable). 다음 판단 주기(1분)에 반영된다 — 배포·재시작이 필요 없다.
+
+    인스턴스 ID가 설정되지 않았으면 바꾸지 않는다. 켜 둬도 아무 일도 일어나지 않는데 화면에는 "켜짐"으로
+    보여, 운영자가 자동화가 돌고 있다고 착각하게 된다.
+    """
+    redirect = RedirectResponse("/admin/autopilot", status_code=303)
+    if not settings.autopilot_instance_id or action not in ("enable", "disable"):
+        return redirect
+    enabled = action == "enable"
+    state = db.get(AutopilotState, 1)
+    if state is None:
+        state = AutopilotState(id=1, enabled=False)
+        db.add(state)
+    if bool(state.enabled) == enabled:
+        # 더블클릭·새로고침 재전송. 같은 알림이 두 번 가지 않게 아무것도 하지 않는다.
+        return redirect
+    state.enabled = enabled
+    state.enabled_changed_at = dt.datetime.now(tz=dt.timezone.utc)
+    state.enabled_changed_by = admin.login_id
+    db.add(
+        AutopilotEvent(
+            kind=SWITCH_CHANGED,
+            source="web",
+            message=f"관리자 {admin.login_id}님이 자동화를 {'켰' if enabled else '껐'}습니다.",
+        )
+    )
+    db.commit()
+    return redirect
 
 
 # ── 팀 등록 / 관리 ──────────────────────────────────────────────────────

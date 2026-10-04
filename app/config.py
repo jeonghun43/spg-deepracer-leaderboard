@@ -63,6 +63,33 @@ class Settings(BaseSettings):
     team_login_max_attempts: int = 10
     team_login_lockout_minutes: int = 5
 
+    # ── 평가 서버 자동 켜기·끄기 (worker-auto-start-stop-plan.md) ────────────────
+    # 켜기는 웹 서버의 autopilot 컨테이너가, 끄기는 평가 서버 안의 autostop 타이머가 한다.
+    # 인스턴스 ID가 비어 있으면 기능 전체가 아무것도 하지 않는다. 그래서 키를 넣지 않은 기존
+    # 배포(노트북 개발 환경 포함)는 그대로 동작한다.
+    # AWS 키는 여기에 두지 않는다. boto3가 AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY를 직접 읽으므로,
+    # 설정 객체를 화면이나 로그에 찍더라도 키가 딸려 나가지 않는다.
+    autopilot_instance_id: str = ""
+    autopilot_region: str = "ap-northeast-2"
+    # 비어 있으면 알림을 보내지 않고 로그만 남긴다. 보낸 것으로 표시하지도 않는다(나중에 넣으면 보낸다).
+    discord_webhook_url: str = ""
+    # 제출 후 2분 안에 켜기 요청(명세서 S1)을 만족하는 가장 긴 간격이다.
+    autopilot_poll_seconds: int = 60
+    # 켜기 요청 후 이만큼 지나도 워커가 살아나지 않으면 알린다(명세서 Q1). 평소 부팅부터 워커 기동까지
+    # 몇 분이 걸려서, 더 짧으면 오경보가 난다.
+    autopilot_start_timeout_minutes: int = 10
+    # 스위치가 꺼진 채 대기 제출이 있고 워커가 이만큼 살아 있지 않으면 알린다(plan.md P2).
+    # 운영자가 스위치를 끄고 서버 켜는 것을 잊은 경우를 잡는다.
+    autopilot_manual_attention_minutes: int = 10
+    # 켜기 요청이 계속 실패하면 1분마다 다시 시도하지만, 알림은 이 간격에 한 번만 보낸다(plan.md §1.2).
+    autopilot_start_failed_repeat_minutes: int = 30
+    # "종료 시 동작"이 stop인지 확인하는 간격. 누가 바꾸면 첫 자동 끄기에서 디스크째 사라진다(plan.md §1.4).
+    autopilot_shutdown_check_hours: int = 24
+    # 대기·평가가 없는 상태가 이만큼 이어지면 평가 서버가 스스로 끈다(명세서 확정값).
+    autostop_idle_minutes: int = 30
+    # SSH 접속 때문에 이만큼 끄지 못하고 있으면 알린다. 접속 창을 열어 둔 채 잊은 경우다(명세서 Q3).
+    autostop_ssh_alert_minutes: int = 60
+
     @field_validator("admin_login_path")
     @classmethod
     def _normalize_admin_login_path(cls, value: str) -> str:

@@ -85,8 +85,10 @@
   - `tskey-…` (Tailscale)
   - `xox[bp]-…` (Slack)
   - `sk-…` (API 키)
-  - `SESSION_SECRET=` / `WORKER_TOKEN=` / `POSTGRES_PASSWORD=` / `ADMIN_LOGIN_PATH=/_ops/…` 뒤에
-    자리표시(`change-me`, `<…>`, `${…}`)가 아닌 실제 값
+  - `discord.com/api/webhooks/…` / `discordapp.com/api/webhooks/…` (디스코드 웹훅 — 알면 누구나 운영 채널에 글을 쓴다)
+  - `SESSION_SECRET=` / `WORKER_TOKEN=` / `POSTGRES_PASSWORD=` / `ADMIN_LOGIN_PATH=/_ops/…` /
+    `AWS_SECRET_ACCESS_KEY=` / `DISCORD_WEBHOOK_URL=` 뒤에 자리표시(`change-me`, `<…>`, `${…}`)가 아닌 실제 값
+    (`AWS_*`·`DISCORD_*`는 2026-10-04 평가 서버 자동 켜기·끄기 때 웹 서버 `.env`에 생긴 키다)
   - 팀·관리자 비밀번호 발급 결과
 - 특히 **로그·터미널 출력·스크린샷 설명을 붙여 넣은 문서**를 의심한다. 비밀값은 대개 거기서 새어 나간다.
 

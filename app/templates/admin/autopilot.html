@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}평가 서버 자동화{% endblock %}
+{% block content %}
+<h1>평가 서버 자동화</h1>
+<p class="muted">제출이 들어오면 평가 서버(EC2)를 켜고, 30분 동안 할 일이 없으면 평가 서버가 스스로 끕니다.
+  상태는 1분마다 갱신됩니다. <a href="/admin">← 대시보드</a></p>
+
+{% if not configured %}
+<div class="card" style="border-color:#c0392b;">
+  <strong>설정되지 않음</strong> — 웹 서버 <code>.env</code>에 <code>AUTOPILOT_INSTANCE_ID</code>가 없습니다.
+  스위치를 바꿀 수 없습니다. 설정 방법은 docs/server-access.md를 보세요.
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0;">자동화 스위치</h2>
+  {% if enabled %}
+    <p><span class="badge status-done">켜짐</span> 제출이 오면 자동으로 켜고, 유휴 30분이면 자동으로 끕니다.</p>
+  {% else %}
+    <p><span class="badge status-hidden">꺼짐</span> 사람이 직접 관리합니다. 서버를 켜지도 끄지도 않습니다.
+      (대기 제출이 10분 넘게 처리되지 않으면 디스코드로 알립니다.)</p>
+  {% endif %}
+  {% if state and state.enabled_changed_at %}
+    <p class="muted">마지막 변경: {{ state.enabled_changed_at | kst }} · {{ state.enabled_changed_by or '-' }}</p>
+  {% endif %}
+  {% if configured %}
+    {% if enabled %}
+    <form method="post" action="/admin/autopilot"
+          onsubmit="return confirm('자동화를 끌까요? 평가 서버는 지금 상태 그대로 남습니다(켜져 있으면 계속 켜져 있습니다).');">
+      <input type="hidden" name="action" value="disable">
+      <button type="submit" class="secondary">자동화 끄기</button>
+    </form>
+    {% else %}
+    <form method="post" action="/admin/autopilot"
+          onsubmit="return confirm('자동화를 켤까요? 대기 제출이 있으면 1분 안에 평가 서버를 켭니다.');">
+      <input type="hidden" name="action" value="enable">
+      <button type="submit">자동화 켜기</button>
+    </form>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0;">평가 서버 상태</h2>
+  <p><strong>{{ status_label }}</strong></p>
+  <table>
+    <tbody>
+      <tr><th>인스턴스</th><td><code>{{ instance_id or '-' }}</code></td></tr>
+      <tr><th>EC2 상태</th>
+        <td>{{ (state.instance_state if state else None) or '-' }}
+          {% if state and state.instance_state_at %}<span class="muted">({{ state.instance_state_at | kst('%m-%d %H:%M:%S') }} 확인)</span>{% endif %}</td></tr>
+      <tr><th>대상 워커</th><td><code>{{ worker_id or '-' }}</code></td></tr>
+      <tr><th>마지막 생존 신호</th>
+        <td>{% if worker_last_seen %}{{ worker_last_seen | kst('%m-%d %H:%M:%S') }}
+          {% if worker_alive %}<span class="badge status-done">정상</span>{% else %}<span class="badge status-error">응답 없음</span>{% endif %}
+          {% else %}-{% endif %}</td></tr>
+      <tr><th>마지막 켜기 요청</th>
+        <td>{% if state and state.last_start_requested_at %}{{ state.last_start_requested_at | kst('%m-%d %H:%M:%S') }}{% else %}-{% endif %}</td></tr>
+    </tbody>
+  </table>
+  {% if state and state.instance_state_at %}{% else %}
+  <p class="muted">EC2 상태가 아직 없습니다. autopilot 컨테이너가 떠 있는지 확인하세요
+    (<code>docker compose -f docker-compose.prod.yml logs autopilot</code>).</p>
+  {% endif %}
+</div>
+
+<h2>최근 기록</h2>
+<table>
+  <thead><tr><th>시각</th><th>종류</th><th>출처</th><th>내용</th><th>디스코드</th></tr></thead>
+  <tbody>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.created_at | kst('%m-%d %H:%M') }}</td>
+      <td>{{ event_labels.get(e.kind, e.kind) }}</td>
+      <td><code>{{ e.source }}</code></td>
+      <td>{{ e.message }}</td>
+      <td>{% if e.notified_at %}보냄{% else %}<span class="muted">대기</span>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">기록이 없습니다.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

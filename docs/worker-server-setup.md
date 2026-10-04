@@ -10,7 +10,7 @@
 > 웹·DB 서버(Lightsail) 쪽은 [server-access.md](server-access.md), 노트북 워커 운영은
 > [operations.md](operations.md)를 본다.
 >
-> 최종 갱신: 2026-09-10
+> 최종 갱신: 2026-10-04 (§8.13 자동 켜기·끄기 추가, §8.8 폐기 표시, §9.4 비용)
 
 ---
 
@@ -42,6 +42,7 @@
 | 4 | 워커 연결 · 평가 1건 실측 | §8.1~8.4 |
 | 5 | AMI 백업 만들기 | §8.5 |
 | 6 | 워커 자동 시작 등록 | §8.6 |
+| 7 | **자동 켜기·끄기** — IAM 사용자, 자동 끄기 타이머 (2026-10-04 추가) | §8.13 |
 
 ---
 
@@ -329,7 +330,7 @@ sudo apt update && sudo apt install -y git
 ```
 
 ```bash
-git clone https://github.com/aws-deepracer-community/deepracer-for-cloud.git
+git clone https://github.com/aws-deepracer-community/deepracer-for-cloud
 ```
 
 ```bash
@@ -382,7 +383,10 @@ docker swarm leave --force
 cd ~/deepracer-for-cloud && ./bin/init.sh -c local -a cpu
 ```
 
-### 7.3 평가 조건을 노트북과 똑같이 맞춘다
+### 7.3 평가 조건을 노트북과 똑같이 맞춘다 - (노트북이 대회 환경으로 세팅되어있는 상태여야함)
+
+세팅되어 있지 않다면 아래 내용을 따라갈 필요 없이 run.env를 대회 환경에 맞게 수정하면 됨
+
 
 `init.sh`가 만드는 기본 `run.env`를 그대로 쓰면 **평가 조건이 달라져 대회 기록을 서로 비교할 수 없게
 된다.** [handover.md](handover.md)의 "평가 기준이 저장소 밖 설정" 경고가 정확히 이 상황을 가리킨다.
@@ -426,7 +430,7 @@ scp -i ~/.ssh/drfc-worker-key.pem ~/deepracer-for-cloud/run.env ~/deepracer-for-
 복사해온 `system.env`의 `DR_MINIO_IMAGE=latest`를 아래로 바꾼다.
 
 ```
-DR_MINIO_IMAGE=RELEASE.2022-10-24T18-35-07Z
+DR_MINIO_IMAGE=RELEASE.2025-09-07T16-13-09Z
 ```
 
 DRFC 코드가 이 값이 비었을 때 쓰는 기본값이 바로 이 버전이다(`bin/activate.sh`). 개발자들이 검증한
@@ -474,11 +478,127 @@ nc -zv 100.110.139.82 5432
 
 `succeeded!`가 나와야 한다. 안 되면 §4를 다시 본다.
 
-### 8.2 저장소 클론과 `.env`
+### 8.2 저장소 클론 · 파이썬 환경 · `.env` (2026-10-01 보강)
 
-[operations.md](operations.md)의 워커 `.env` 형식을 그대로 쓰되, `DATABASE_URL`의 호스트를
-Lightsail tailnet 주소(`100.110.139.82`)로 둔다. `WORKER_TOKEN`이 설정되면 워커가 자동으로
-http 전송 모드로 동작한다.
+> 2026-10-01 평가 서버를 새로 만들 때 이 절에 실제 명령이 없어서 막혔다. 지난번 서버는 손으로
+> 만들고 기록을 남기지 않았기 때문이다. 이때 "웹 서버에 들어가서 `run_worker.sh`를 돌려야 하나?"
+> 하는 혼동도 있었다.
+
+**워커는 이 평가 서버에서만 돈다.** 웹 서버(`~/drleader`)에도 tar로 올라간 `worker/` 폴더가 있지만
+거기서는 실행할 수 없다. `run_worker.sh`는 시작하자마자 `~/deepracer-for-cloud/bin/activate.sh`를
+불러오는데, 웹 서버에는 DRFC가 없다. 2GB 서버라 시뮬레이터를 돌릴 수도 없다. 그래서 새 평가
+서버를 만들면 **워커 코드도 이 서버에 새로 받아야 한다.**
+
+#### ① 저장소 받기
+
+공개 저장소라 인증 없이 받아진다. 운영 코드는 **`main` 브랜치**를 쓴다. clone하면 기본으로
+`main`이 받아진다.
+
+```bash
+cd ~ && git clone https://github.com/jeonghun43/spg-deepracer-leaderboard.git
+```
+
+```bash
+cd ~/spg-deepracer-leaderboard && git branch --show-current
+```
+
+`main`이 나와야 한다.
+
+- **경로를 바꾸지 않는다.** §8.6의 systemd 유닛이 `/home/ubuntu/spg-deepracer-leaderboard`를 그대로
+  가리킨다.
+- 이후 코드 갱신은 이 폴더에서 `git pull`로 한다(§9.3 표). 웹 서버의 tar 방식과 다르다
+  ([server-access.md](server-access.md) §5).
+
+#### ② 파이썬 환경 만들기
+
+```bash
+cd ~/spg-deepracer-leaderboard && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+- `run_worker.sh`는 마지막에 저장소의 **`.venv/bin/python`을 직접 실행한다**
+  ([run_worker.sh](../worker/run_worker.sh) 마지막 줄). 그래서 폴더 이름은 반드시 `.venv`여야 한다.
+  `venv`나 시스템 파이썬으로는 워커가 뜨지 않는다.
+- `python3-venv`는 §7.1의 `prepare.sh`가 이미 설치했다.
+- [operations.md](operations.md) "사전 준비"에도 같은 명령이 있지만, 그쪽은 노트북(WSL) 경로
+  (`/mnt/c/...`)다.
+
+#### ③ `.env` 만들기 — 워커가 읽는 키는 3개뿐이다
+
+```bash
+nano ~/spg-deepracer-leaderboard/.env
+```
+
+```
+DATABASE_URL=postgresql+psycopg2://drleader:<비밀번호>@100.110.139.82:5432/drleader
+WEB_BASE_URL=https://spg-deepracer.doublejeong.com
+WORKER_TOKEN=<웹 서버 .env의 WORKER_TOKEN과 같은 값>
+```
+
+| 키 | 값을 어디서 가져오나 | 틀리면 |
+|---|---|---|
+| `DATABASE_URL` | `<비밀번호>`는 **웹 서버 `.env`의 `POSTGRES_PASSWORD`**. 운영 DB 계정은 `drleader`로 고정이다([docker-compose.prod.yml](../docker-compose.prod.yml)의 `web` 서비스 `DATABASE_URL`). 호스트는 반드시 Lightsail의 tailnet 주소 `100.110.139.82` | 워커가 시작하자마자 DB 접속 오류로 죽는다 |
+| `WEB_BASE_URL` | 대회 사이트 주소 그대로 | 모델 다운로드부터 실패한다 |
+| `WORKER_TOKEN` | **웹 서버 `.env`의 `WORKER_TOKEN`과 한 글자도 다르지 않게** | 모델 다운로드가 **`404 Not Found`** 로 실패한다. 토큰이 틀려도 401이 아니라 404인 것은 의도된 동작이다. 내부 경로가 있다는 것 자체를 숨기려는 것이다([app/routers/internal.py](../app/routers/internal.py)의 `require_worker`) |
+
+`WORKER_TOKEN`이 있으면 워커는 자동으로 **http 전송 모드**로 동작한다. 모델을 웹 서버에서 내려받고,
+영상·metrics를 웹 서버로 올린다. 비어 있으면 웹과 같은 디스크를 공유하던 옛 방식으로 동작하고,
+이 서버에서는 실패한다.
+
+**값은 웹 서버에 접속해서 직접 보고 옮긴다.** 채팅이나 문서에 붙여 넣지 않는다(CLAUDE.md §4).
+
+```bash
+grep -E '^(POSTGRES_PASSWORD|WORKER_TOKEN)=' ~/drleader/.env
+```
+
+(웹 서버에서 실행한다. 자기 터미널에만 출력된다.)
+
+다 쓴 뒤 다른 계정이 읽지 못하게 권한을 조인다.
+
+```bash
+chmod 600 ~/spg-deepracer-leaderboard/.env
+```
+
+**[왜 `.env.example`의 다른 키는 넣지 않나]** `.env.example`은 **웹 서버용 템플릿**이라 키가 많다.
+하지만 워커 코드(`worker/`와 워커가 불러오는 `app/` 모듈)가 `.env`에서 바꿔 쓰는 설정은
+`database_url`, `worker_token`, `web_base_url` 세 개뿐이다. 나머지(`storage_dir`, `online_eval_laps` 등)는
+코드 기본값을 쓴다. 2026-10-01에 `settings.` 사용처를 전부 검색해 확인했다.
+
+| `.env.example`의 키 | 누가 쓰나 | 워커 서버에 넣으면 |
+|---|---|---|
+| `SESSION_SECRET`, `SESSION_HTTPS_ONLY`, `SESSION_MAX_AGE_SECONDS` | 웹(로그인 세션) | 효과 없음. **세션 서명 키만 불필요하게 노출된다** |
+| `ADMIN_LOGIN_PATH`, `ADMIN_LOGIN_*`, `TEAM_LOGIN_*` | 웹(로그인 화면·잠금) | 효과 없음. **숨긴 관리자 경로가 노출된다** |
+| `DAILY_SUBMISSION_LIMIT` | 웹(제출 접수) | **효과 없음.** 대회 중 한도를 바꾸려면 웹 서버 `.env`를 고친다 |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | 웹 서버의 DB 컨테이너 | 효과 없음. 비밀번호는 `DATABASE_URL` 안에만 있으면 된다 |
+
+넣어도 워커가 깨지지는 않는다. 모르는 키는 무시하기 때문이다(`app/config.py`의 `extra="ignore"`).
+그래도 넣지 않는 이유는 **이 서버의 `.env`가 AMI에 그대로 담기기 때문이다**(§8.5). 워커 서버나
+AMI가 새더라도 웹의 세션 서명 키와 관리자 경로까지 함께 새지 않게, 워커에 필요한 값만 둔다.
+
+#### ④ 확인
+
+| 확인 | 명령 | 기대값 |
+|---|---|---|
+| 파이썬 환경 | `ls ~/spg-deepracer-leaderboard/.venv/bin/python` | 파일이 있다 |
+| `.env` 키 (값은 안 보인다) | `grep -oE '^[A-Z_]+=' ~/spg-deepracer-leaderboard/.env` | `DATABASE_URL=` `WEB_BASE_URL=` `WORKER_TOKEN=` 세 줄 |
+| 워커가 실제로 쓸 웹 주소 | `cd ~/spg-deepracer-leaderboard && .venv/bin/python -c "from app.config import settings; print(settings.web_base_url)"` | `https://spg-deepracer.doublejeong.com` (**`http://localhost:8000`이면 `WEB_BASE_URL`이 빠진 것이다**) |
+| DB까지 닿는가 | §8.1의 `nc -zv 100.110.139.82 5432` | `succeeded!` |
+
+넷 다 통과하면 §8.3으로 간다.
+
+> **2026-10-01 실제로 겪음 — `WEB_BASE_URL`을 빠뜨리면 DB는 붙는데 전송만 실패한다.**
+> 웹 서버용 키를 걸러내다가 `WEB_BASE_URL`까지 지웠다. 워커는 코드 기본값
+> `http://localhost:8000`(`app/config.py`)으로 모델을 받으러 갔고, 평가 서버에는 웹이 없으니
+> 다음 로그가 30초마다 반복됐다.
+>
+> ```
+> 파일 전송 실패 — 대기열로 되돌립니다: submission=… 웹 서버에 연결하지 못했습니다: [Errno 111] Connection refused
+> ```
+>
+> 이 기본값은 웹과 워커가 한 기기에 있던 시절의 값이라 **빠뜨려도 오류 없이 그럴듯하게 동작하는 척한다.**
+> 실패한 제출은 "실패"로 기록되지 않고 대기열로 되돌아가므로 잃는 것은 없다. `.env`를 고친 뒤
+> `sudo systemctl restart drfc-worker`로 재시작하면 반영된다(설정은 기동할 때 한 번만 읽는다).
+> 웹 주소를 `http://100.110.139.82:8000`처럼 IP와 포트로 넣어도 같은 오류가 난다. 운영 웹
+> 컨테이너는 8000번을 서버 밖으로 열지 않기 때문이다(`docker-compose.prod.yml`의 `expose`).
 
 ### 8.3 워커 첫 실행 — ⚠️ 로그가 조용한 게 정상이다
 
@@ -694,7 +814,24 @@ UPDATE submissions SET status='queued', worker_id=NULL, started_at=NULL WHERE id
 > `DR_RUN_ID`와 `DR_LOCAL_S3_MODEL_PREFIX`를 분리한 별도 `run.env`가 필요하고,
 > `worker/run.py`의 `WORKER_ID`가 호스트명 고정이라 한 줄 수정도 필요하다.
 
-### 8.8 예비 워커 — 노트북 (2026-08-01 결정)
+### 8.8 예비 워커 — 노트북 (2026-08-01 결정, ⛔ 2026-10-04 폐기)
+
+> ⛔ **2026-10-04부터 노트북을 예비 워커로 쓰지 않는다**
+> ([명세서](../specs/001-online-virtual-evaluation/worker-auto-start-stop.md) §6 Q2).
+>
+> **왜**: 자동 켜기(§8.13)는 "대기 제출이 있는데 **대상 EC2의 워커**가 살아 있지 않으면 켠다"로
+> 판단한다. 다른 기기의 워커는 판단에 넣지 않는다. 그래서 노트북 워커가 살아 있어도 EC2는 켜지고,
+> 두 워커가 같은 대기열을 나눠 집는다. 그렇게 되면 이 절이 지키려던 "두 서버의 평가 조건이 같아야
+> 한다"를 매번 확인해야 하고, 노트북을 덮거나 끌 때 제출이 노트북 `worker_id`로 갇히는 문제(아래
+> ⚠️)도 그대로 남는다. 반대로 노트북 워커까지 판단에 넣으면, 노트북이 켜져 있는 동안 EC2가 안 켜져
+> 노트북 하나에 대회가 걸린다. 평가 서버를 **온디맨드 1대**로 바꿔 회수 걱정이 없어졌으므로(명세서
+> §1.3) 예비 워커 자체가 필요 없어졌다.
+>
+> **대신 할 일**: 몰릴 것 같으면 관리자 페이지 "평가 서버 자동화"에서 스위치를 끄고 서버를 켜 둔다
+> (명세서 Q6). EC2가 켜지지 않으면 디스코드 `⚠️ 평가 서버 켜기 실패`/`⚠️ 평가 서버가 켜지지 않음`
+> 알림이 오고, 콘솔에서 직접 켜고 원인을 본다(§8.13).
+>
+> 아래 내용은 왜 그렇게 운영했는지 남기기 위한 **기록**이다. 따라 하지 않는다.
 
 **평상시 구성은 EC2 워커 1개다.** 10팀 기준 하루 최악 30건인데 평가 1건이 약 8분이라
 4시간이면 소화된다. 노트북은 **꺼두었다가 필요할 때만 켜는 예비 워커**로 둔다.
@@ -909,6 +1046,7 @@ ssh -i ~/.ssh/drfc-worker-key.pem ubuntu@100.93.165.104 'journalctl -u drfc-work
 | 중지 중에는 **EBS 요금만** 나간다 | 기다리는 비용은 하루 약 430원(§9.1) |
 
 **언제 돌아올지는 알 수 없다.** 대회 중이라 큐가 쌓이면 기다리지 말고 노트북 예비 워커를 켠다(§8.8).
+(2026-10-04부터 노트북 예비 워커는 쓰지 않는다. 지금은 평가 서버가 온디맨드라 회수 자체가 없다.)
 이때 평가 도중 멈춘 제출은 **EC2의 `worker_id`로 `running`에 갇혀 있다.** 노트북 워커는 다른
 `worker_id`라 35분이 지나야 풀어주므로, 급하면 §8.7의 SQL로 직접 되돌린다.
 
@@ -1127,6 +1265,417 @@ aws ec2 get-console-output --region ap-northeast-2 --instance-id <인스턴스ID
 - **이름에 `g`가 붙은 유형(`m7g` 등)은 ARM이라 이 AMI(x86)로 뜨지 않는다.**
 - 하드웨어가 바뀌면 평가 1건 시간이 달라지므로 §8.4의 실측을 다시 한다.
 
+### 8.13 자동 켜기·끄기 (2026-10-04 추가)
+
+> 평가 서버를 **온디맨드 1대**로 두고, 평소에는 꺼 두었다가 제출이 들어오면 켜고, 30분 동안 할 일이
+> 없으면 다시 끈다. 스팟은 회수가 잦았고(§8.11, 2026-10-01에는 디스크째 사라짐), 온디맨드를 24시간
+> 켜 두면 세 배 넘게 비싸다(§9.4). 설계 근거는 명세서·계획서에 있다 —
+> [명세서](../specs/001-online-virtual-evaluation/worker-auto-start-stop.md),
+> [계획서](../specs/001-online-virtual-evaluation/worker-auto-start-stop-plan.md).
+
+#### ① 전체 그림 — 켜기는 밖에서, 끄기는 안에서
+
+```
+ [웹 서버 - Lightsail]                          [평가 서버 - EC2 온디맨드]
+   autopilot 컨테이너 (1분마다)                    drfc-autostop 타이머 (1분마다)
+   ├ 대기 제출 있음 + 대상 워커 죽음                ├ 대기·평가 없음 + 평가 스택 없음 + SSH 없음
+   │   → EC2 "시작" API 호출 (AWS 키 필요)          │   이 상태가 30분 이어지면
+   └ 쌓인 알림을 디스코드로 보낸다                   └ DB에 "끕니다" 기록 → 워커 내림 → poweroff
+              ▲                                              │
+              └────────── DB의 이벤트 표 (Tailscale) ◀───────┘
+```
+
+| 역할 | 누가 | 왜 거기서 |
+|---|---|---|
+| **켜기** | 웹 서버의 `autopilot` 컨테이너 | 꺼져 있는 서버는 스스로 켤 수 없다. 늘 켜져 있는 웹 서버가 AWS API로 켠다. 그래서 **AWS 키는 웹 서버 `.env`에만** 있다(④) |
+| **끄기** | 평가 서버 안의 `drfc-autostop` 타이머 | 서버 안에서 `poweroff`하면 AWS 키가 필요 없다. 그래서 평가 서버에는 지금처럼 **AWS 자격증명을 두지 않는다**(§7.5). 평가 중인지, SSH 접속이 있는지도 안에서만 정확히 안다 |
+| **알림** | 웹 서버 `autopilot` 한 곳 | 평가 서버는 "알릴 일"을 DB에 적기만 한다. 디스코드 웹훅 주소가 웹 서버 한 곳에만 있다 |
+| **스위치** | 관리자 페이지 → "평가 서버 자동화" | 기본값 **꺼짐**. 꺼짐 = "사람이 직접 관리" — 자동으로 켜지도 끄지도 않는다 |
+
+웹 서버 쪽 설정(`.env` 키, `autopilot` 로그)은 [server-access.md](server-access.md), 디스코드 알림별
+대응은 [operations.md](operations.md)를 본다. 이 절은 **평가 서버와 AWS 콘솔에서 하는 일**만 다룬다.
+
+**설치 순서** (계획서 §6). 스위치 기본값이 꺼짐이라 마지막 단계 전까지는 아무것도 자동으로 움직이지 않는다.
+
+1. ② "종료 시 동작"이 **중지**인지 확인 (AMI부터 떠 둔다 — §8.5)
+2. ③ 워커 ID(호스트 이름) 확인
+3. ④ IAM 사용자·정책 → 시뮬레이터 확인 → 액세스 키를 웹 서버 `.env`에
+4. 웹 서버 배포([server-access.md](server-access.md) §5 — tar 전송 후 `up -d --build`)
+5. ⑤ 평가 서버에 `git pull` → 타이머 등록 → `--dry-run` 확인
+6. 관리자 페이지에서 스위치를 켠다
+
+#### ② 전제 조건 — "종료 시 동작"이 **중지**여야 한다
+
+자동 끄기는 서버 안에서 `poweroff`한다. 이때 인스턴스가 어떻게 되는지는 인스턴스 속성
+**"종료 시 동작"(`InstanceInitiatedShutdownBehavior`)** 이 정한다.
+
+| 종료 시 동작 | 서버 안에서 `poweroff`하면 |
+|---|---|
+| **중지(stop)** — 기본값 | 콘솔에서 "인스턴스 중지"를 누른 것과 같은 결과. 디스크·사설 IP(=워커 ID)가 남는다 |
+| **종료(terminate)** | **인스턴스와 루트 볼륨이 통째로 사라진다.** DRFC, MinIO 이미지, `.env`, `eval_logs` 전부 |
+
+> **2026-10-01 사고와 같은 결과다.** 그때는 스팟의 "중단 동작"이 기본값(종료)이라 회수되는 순간
+> 디스크째 사라졌다. 장치는 다르지만(스팟 중단 동작 ≠ 종료 시 동작) 잃는 것은 같다. 그래서 웹 서버의
+> `autopilot`이 기동할 때와 하루 한 번 이 값을 읽어, `stop`이 아니면(또는 읽지 못하면)
+> 디스코드로 `🚨 평가 서버 설정 위험`을 보낸다.
+
+**확인하는 곳** (콘솔):
+
+> EC2 → 인스턴스 → `drfc-worker` 선택 → **작업** → **인스턴스 설정** → **종료 시 동작 변경**
+
+**`중지`가 선택돼 있으면 아무것도 바꾸지 않고 취소한다.**
+
+> ⛔ **시험해 본다고 `종료`로 바꾸지 않는다. 한 번이라도.** 바꿔 둔 채 잊으면 다음 자동 끄기(최대
+> 30분 뒤)에 서버가 디스크째 사라진다. "알림이 제대로 오는지" 보려고 바꿀 이유도 없다 — 알림 경로는
+> 다른 이벤트(`평가 서버 자동 중지` 등)로 확인된다.
+
+> 📌 §1.1 표의 **"스팟 중단 동작"과는 다른 설정이다.** 스팟 중단 동작은 AWS가 회수할 때, 종료 시
+> 동작은 **서버 안에서 끌 때** 적용된다. 콘솔의 "인스턴스 중지" 버튼에는 둘 다 적용되지 않는다.
+
+**2026-10-04 실측** — 온디맨드 평가 서버(`ip-172-31-61-59`)에서 평가가 없을 때 `sudo poweroff`를
+실행했다. SSH가 `closed by remote host`로 끊기고 잠시 뒤 콘솔에 **중지됨**이 떴다(상태 전환 사유
+`Client.InstanceInitiatedShutdown`, §8.11 ③). 다시 켜니 사람이 아무것도 하지 않아도 `drfc-worker`가
+`active (running)`으로 살아났다. 새 인스턴스를 만들면 이 시험을 한 번 다시 한다(**AMI를 먼저 뜬 뒤**).
+
+#### ③ 워커 ID 확인 — 호스트 이름이 `ip-172-31-…` 형식이어야 한다
+
+`autopilot`은 "대상 EC2의 워커가 살아 있나"를 이렇게 알아낸다.
+
+1. 설정된 인스턴스 ID로 EC2에 물어 **프라이빗 IP DNS 이름**(`ip-172-31-61-59.ap-northeast-2.compute.internal`)을 받는다
+2. 첫 점 앞(`ip-172-31-61-59`)을 잘라 **대상 워커 ID**로 쓴다(`app/autopilot_logic.py`의 `worker_id_from_private_dns`)
+3. DB에서 그 워커 ID의 하트비트를 본다
+
+그런데 워커 ID는 **평가 서버의 호스트 이름**이다(`worker/run.py`의 `socket.gethostname()`). 둘이 같아야
+워커를 알아본다. 인스턴스를 만들 때 **호스트 이름 유형을 "리소스 이름"** 으로 고르면 호스트 이름이
+`i-0abc…` 형식이 되어 둘이 어긋난다. 그러면 워커가 멀쩡히 돌아도 `autopilot`은 "대상 워커가 죽었다"로
+보고, 켜진 서버에 계속 `⚠️ 평가 서버가 켜지지 않음`을 보낸다.
+
+**확인** — 두 값의 앞부분이 같아야 한다.
+
+| 어디서 | 방법 | 예 |
+|---|---|---|
+| 평가 서버 | `hostname` | `ip-172-31-61-59` |
+| 콘솔 | EC2 → 인스턴스 → `drfc-worker` → 세부 정보 → **프라이빗 IP DNS 이름(IPv4만 해당)** | `ip-172-31-61-59.ap-northeast-2.compute.internal` |
+
+`hostname`이 `i-…`로 나오면 같은 세부 정보 탭의 **호스트 이름 유형**이 "리소스 이름"으로 되어 있는
+것이다. 인스턴스를 중지한 뒤 **작업 → 인스턴스 설정 → 리소스 기반 이름 지정 옵션 변경**에서
+"IP 이름"으로 바꾼다(콘솔 버전에 따라 메뉴 이름이 조금 다를 수 있다). 워커 ID가 바뀌므로
+평가 중이 아닐 때 한다.
+
+> 관리자 페이지 "평가 서버 자동화" 화면에 **대상 워커 ID**가 보인다. 그 값과 `journalctl -u drfc-worker`의
+> `워커 시작 (worker_id=…)` 값이 같은지 한 번 보면 된다.
+
+#### ④ IAM — "그 인스턴스를 켜는 것"만 할 수 있는 사용자
+
+Lightsail에는 IAM 역할을 붙일 수 없어서 **IAM 사용자의 액세스 키**를 웹 서버 `.env`에 둔다. 키가
+새더라도 할 수 있는 최악의 일이 **"그 서버를 켜서 요금이 나가는 것"** 에 그치도록 권한을 좁힌다.
+끄기·만들기·지우기 권한과 다른 서비스 권한은 주지 않는다.
+
+> ⛔ **root 계정의 액세스 키는 절대 만들지도 쓰지도 않는다.** root 키가 새면 계정 전체를 잃는다.
+> 2026-10-04 CloudTrail을 확인하다 콘솔 작업을 root로 하고 있던 것이 드러났다. 콘솔 작업도 가능하면
+> 별도 IAM 사용자로 옮기는 것이 좋다.
+
+**가) 사용자 만들기** (2026-10-04 생성됨)
+
+> IAM → **사용자** → **사용자 생성**
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| 사용자 이름 | `drleader-autopilot` | 무엇에 쓰는 키인지 이름으로 알 수 있게 |
+| AWS Management Console에 대한 사용자 액세스 권한 제공 | **체크하지 않는다** | 프로그램만 쓰는 사용자다. 비밀번호가 없으면 콘솔로 들어올 길도 없다 |
+| 권한 설정 | **아무 정책도 연결하지 않고** 다음 → 사용자 생성 | 권한은 나)에서 인라인 정책 하나로만 준다. `AmazonEC2FullAccess` 같은 관리형 정책은 붙이지 않는다 |
+
+**나) 인라인 정책 붙이기**
+
+> IAM → 사용자 → `drleader-autopilot` → **권한** 탭 → **권한 추가** → **인라인 정책 생성** → **JSON**
+
+정책 이름: `autopilot-start-eval-server`
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "StartEvalServerOnly",
+      "Effect": "Allow",
+      "Action": "ec2:StartInstances",
+      "Resource": "arn:aws:ec2:ap-northeast-2:<계정ID 12자리, 하이픈 없이>:instance/<인스턴스 ID>"
+    },
+    {
+      "Sid": "CheckShutdownBehavior",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeInstanceAttribute",
+      "Resource": "arn:aws:ec2:ap-northeast-2:<계정ID 12자리, 하이픈 없이>:instance/<인스턴스 ID>"
+    },
+    {
+      "Sid": "ReadInstanceState",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeInstances",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+| 권한 | 대상 | 왜 |
+|---|---|---|
+| `ec2:StartInstances` | **대상 인스턴스 ARN 하나** | 유일한 쓰기 권한. 다른 인스턴스는 켤 수 없다 |
+| `ec2:DescribeInstanceAttribute` | 대상 인스턴스 ARN 하나 | ②의 "종료 시 동작" 점검(`app/autopilot_aws.py`의 `shutdown_behavior`). 읽기 전용 |
+| `ec2:DescribeInstances` | `*` | 상태·사설 DNS 이름 조회. **이 API는 대상을 좁힐 수 없다**(리소스 수준 권한 미지원). 읽기 전용이다 |
+
+자리표시 채우는 법:
+
+- **계정 ID**: 콘솔 오른쪽 위 계정 이름을 누르면 보인다. 화면에는 `1234-5678-9012`처럼 하이픈이 들어가
+  있지만 **ARN에는 하이픈 없이 12자리**를 쓴다. 하이픈이 들어간 ARN은 실제 인스턴스와 일치하지 않아 허용되지 않는다
+- **인스턴스 ID**: EC2 → 인스턴스 목록의 `i-…` 값. 웹 서버 `.env`의 `AUTOPILOT_INSTANCE_ID`와 같은 값이다
+- **리전**: `ap-northeast-2` 그대로 둔다. **고쳐 쓰지 않는다**(아래 사고)
+
+> **[왜 `DescribeInstanceAttribute`를 인스턴스 ARN으로 좁혔나]** 계획서 §5.3은 "좁혀지는지 확인하고,
+> 안 되면 `*`"로 미뤄 두었다. 2026-10-04 AWS Service Authorization Reference의 EC2 항목을 확인했다
+> ([사람이 읽는 표](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html),
+> 같은 내용의 [기계 판독용 JSON](https://servicereference.us-east-1.amazonaws.com/v1/ec2/ec2.json)).
+> `DescribeInstanceAttribute`는 리소스 유형으로 **`instance`** 를 받는다(ARN 형식
+> `arn:${Partition}:ec2:${Region}:${Account}:instance/${InstanceId}`). 반면 `DescribeInstances`는
+> 리소스 유형이 없어 `*`만 된다. "EC2의 Describe 계열은 전부 리소스 수준 권한을 지원하지 않는다"는
+> 설명이 검색에 흔하지만 `DescribeInstanceAttribute`에는 맞지 않는다. 어느 쪽이든 **아래 시뮬레이터
+> 표가 최종 판정이다.** 시뮬레이터에서 이 줄이 거부되면 이 문(`CheckShutdownBehavior`)의 `Resource`를
+> `"*"`로 바꾼다(읽기 전용이라 위험이 거의 없다).
+
+**다) 정책 시뮬레이터로 확인한다 — 키를 쓰기 전에 반드시**
+
+> **2026-10-04 실제로 겪음 — 리전 오타 한 글자.** 처음 정책을 만들 때 ARN의 리전을 `ap-nortease-2`로
+> 잘못 적었다. 정책은 오류 없이 저장됐다. 시뮬레이터를 돌려 보니 **`StartInstances`만 거부되고**
+> `DescribeInstances`는 통과했다 — `DescribeInstances`는 `*`라서 ARN 오타의 영향을 받지 않기 때문이다.
+> 이대로 배포했다면 `autopilot`은 상태 조회는 잘 되니 정상처럼 보이다가, 처음 켜야 할 순간에야
+> `UnauthorizedOperation`으로 실패했을 것이다. **ARN 한 줄로 좁힌 권한은 한 글자만 틀려도 조용히
+> 거부된다.** 그래서 저장한 뒤에는 반드시 시뮬레이터로 확인한다.
+
+> https://policysim.aws.amazon.com → 왼쪽 **Users**에서 `drleader-autopilot` 선택 → 서비스
+> **Amazon EC2** → 아래 표의 작업 선택 → 작업을 펼쳐 **리소스(Resource)** 칸에 ARN 입력 →
+> **Run Simulation**
+
+`<대상 ARN>` = 정책에 적은 ARN. `<다른 ARN>` = 대상 ARN에서 인스턴스 ID 끝 한 글자만 바꾼 것.
+
+| 작업 | 리소스 | 기대 결과 | 이 줄이 확인하는 것 |
+|---|---|---|---|
+| `StartInstances` | `<대상 ARN>` | **allowed** | 켤 수 있다. **denied면 ARN 오타**(리전·계정 ID 하이픈·인스턴스 ID) |
+| `StartInstances` | `<다른 ARN>` | **denied** | 다른 인스턴스는 못 켠다 |
+| `DescribeInstanceAttribute` | `<대상 ARN>` | **allowed** | "종료 시 동작" 점검이 된다 |
+| `DescribeInstances` | `*` | **allowed** | 상태 조회가 된다 |
+| `StopInstances` | `<대상 ARN>` | **denied** | 끄기 권한이 없다 |
+| `TerminateInstances` | `<대상 ARN>` | **denied** | 지우기 권한이 없다 |
+| `RunInstances` | `*` | **denied** | 새 서버를 만들 수 없다 |
+
+일곱 줄이 모두 기대와 같아야 다음으로 간다.
+
+> 배포한 뒤에도 한 번 더 확인된다. `autopilot`은 기동할 때 바로 `DescribeInstances`와
+> `DescribeInstanceAttribute`를 부른다. 권한이 틀렸으면 `docker compose -f docker-compose.prod.yml logs autopilot`
+> (웹 서버 `~/drleader`)에 오류가 남고, 디스코드에 `🚨 평가 서버 설정 위험`(확인 실패)이 온다.
+> `StartInstances`는 실제로 켤 일이 생겨야 불리므로 **시뮬레이터 말고는 미리 확인할 방법이 없다.**
+
+**라) 액세스 키 발급**
+
+> IAM → 사용자 → `drleader-autopilot` → **보안 자격 증명** 탭 → **액세스 키 만들기**
+
+| 단계 | 고를 것 | 이유 |
+|---|---|---|
+| 사용 사례 | **AWS 외부에서 실행되는 애플리케이션** | Lightsail은 IAM 역할을 못 붙이는 "AWS 밖" 취급이다. 콘솔이 다른 방법(역할 등)을 권하는 안내가 떠도 이 경우는 해당하지 않는다 |
+| 설명 태그 | `lightsail drleader autopilot` 등 | 나중에 키가 여러 개일 때 어디 쓰는 키인지 알아본다 |
+
+**비밀 액세스 키는 이 화면에서 단 한 번만 보인다.** 창을 닫으면 다시 볼 수 없다(잃어버리면 새로
+발급하고 옛 키를 지운다).
+
+- 웹 서버에 SSH로 접속해 **`~/drleader/.env`에 바로 붙여 넣는다.** 키 이름은 `AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY`. `AUTOPILOT_INSTANCE_ID`도 함께 넣는다(나머지 키와 반영 방법은
+  [server-access.md](server-access.md)).
+- **채팅·문서·메모장·스크린샷에 붙이지 않는다**(CLAUDE.md §4). `.csv 파일 다운로드`도 누르지 않는다.
+  눌렀다면 `.env`에 옮긴 뒤 그 파일을 지운다.
+- `.env`는 tar 전송에서 빠지므로(CLAUDE.md §2) 로컬 `.env`에 넣어 두어도 서버에 가지 않는다.
+  **서버 `.env`를 직접 고친다.**
+- 이 키는 **웹 서버에만** 둔다. 평가 서버에는 넣지 않는다(§7.5) — 평가 서버는 키 없이 스스로 끈다.
+
+**마) 키가 샜다고 의심되면 — 교체 순서**
+
+새 키를 먼저 넣고 옛 키를 지운다. 반대로 하면 그 사이 자동 켜기가 실패한다.
+
+1. IAM → `drleader-autopilot` → 보안 자격 증명 → 옛 키 **비활성화**(지우지 않는다 — 문제가 생기면 되살릴 수 있게)
+2. **새 액세스 키 만들기**(라)
+3. 웹 서버 `~/drleader/.env`의 `AWS_ACCESS_KEY_ID`·`AWS_SECRET_ACCESS_KEY`를 새 값으로 바꾼다
+4. 웹 서버 `~/drleader`에서 `docker compose -f docker-compose.prod.yml up -d` — `.env`만 바뀐 경우다.
+   코드도 바뀌었으면 `up -d --build`. **`restart`로는 `.env` 변경이 반영되지 않는다**
+5. `logs autopilot`에 권한 오류가 없는지 본다
+6. 옛 키를 **삭제**한다
+
+> 키가 새도 할 수 있는 일은 "이 서버를 켜기"뿐이다(다의 표). 그래도 요금이 나가므로 의심되면 바로 바꾼다.
+> CloudTrail 이벤트 기록(§8.11 ⑤)에서 **사용자 이름** = `drleader-autopilot`으로 걸러 보면 그 키로
+> 무엇이 불렸는지 보인다.
+
+#### ⑤ 평가 서버에 자동 끄기 타이머 등록
+
+**코드 받기** — 평가 서버는 `git pull`이다(웹 서버의 tar 방식과 다르다 — CLAUDE.md §1).
+
+```bash
+cd ~/spg-deepracer-leaderboard && git pull
+```
+
+`.env`에 추가할 키는 없다. `worker/autostop.py`는 기존 `DATABASE_URL`만 쓴다(유휴 시간을 바꾸고
+싶을 때만 선택으로 `AUTOSTOP_IDLE_MINUTES`).
+
+**유닛 파일 두 개를 만든다.**
+
+```bash
+sudo nano /etc/systemd/system/drfc-autostop.service
+```
+
+```ini
+[Unit]
+Description=DeepRacer eval server auto-stop check (one shot)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/home/ubuntu/spg-deepracer-leaderboard
+ExecStart=/home/ubuntu/spg-deepracer-leaderboard/.venv/bin/python -m worker.autostop
+```
+
+```bash
+sudo nano /etc/systemd/system/drfc-autostop.timer
+```
+
+```ini
+[Unit]
+Description=Run drfc-autostop every minute
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+각 항목이 왜 필요한지:
+
+| 항목 | 이유 |
+|---|---|
+| `Type=oneshot` | 스크립트는 **한 번 판단하고 끝난다**. 상주하지 않으니 메모리를 쓰지 않고, 스크립트가 죽어도 다음 주기에 새로 뜬다 |
+| `User=root` | `systemctl poweroff`, `systemctl stop drfc-worker`, `docker stack ls`에 필요하다. §8.6의 워커는 `ubuntu`로 돌지만 이 스크립트는 서버를 끄는 일이라 root여야 한다 |
+| `WorkingDirectory` | `.env`를 상대경로로 읽는다(§8.6과 같은 이유) |
+| `ExecStart`의 `.venv/bin/python` | 워커와 같은 파이썬 환경(§8.2 ②). `-m worker.autostop`이라 저장소 루트에서 실행돼야 `app`·`worker` 패키지를 찾는다 |
+| `.service`에 `[Install]`이 없음 | 타이머가 부른다. 서비스를 직접 `enable`하지 않는다 |
+| `OnBootSec=5min` | **부팅 5분 뒤부터** 확인을 시작한다. 스크립트가 잘못돼 켜지자마자 꺼 버려도, 그 5분 안에 SSH로 들어가 고칠 수 있다(AWS 개발자 글이 경고한 함정, 계획서 §2.3). 워커·도커가 다 뜨기 전에 "할 일 없음"으로 잘못 세는 것도 막는다 |
+| `OnUnitActiveSec=1min` | 직전 실행 1분 뒤에 다시 실행. 30분 유휴 판단에는 1분 단위로 충분하다. systemd 타이머의 기본 오차(`AccuracySec` 1분) 때문에 실제 간격이 1~2분으로 흔들릴 수 있지만 30분 기준에는 영향이 없다 |
+| `WantedBy=timers.target` | 부팅할 때 타이머가 자동으로 켜진다. 자동으로 켜진 뒤 다시 꺼지는 한 바퀴가 사람 없이 돌려면 필요하다 |
+
+> 유휴 시작 시각 같은 상태는 `/run/drfc-autostop/`에 파일로 둔다. `/run`은 재부팅하면 비워지므로
+> **켜질 때마다 유휴 시간을 0부터 다시 센다.** 의도한 동작이다 — 켜지자마자 "30분 지났다"로 꺼지지 않는다.
+
+**등록하고 켠다.** 스위치가 꺼져 있는 동안에는 타이머가 돌아도 아무것도 끄지 않으므로 지금 켜도 안전하다.
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now drfc-autostop.timer
+```
+
+(`.service`가 아니라 **`.timer`** 를 enable한다.)
+
+**확인**
+
+```bash
+systemctl list-timers drfc-autostop.timer
+```
+
+`NEXT`에 1분 안쪽 시각이, `LAST`에 직전 실행 시각이 보이면 돈다(부팅 직후 5분 동안은 `LAST`가 비어 있다).
+
+판단만 보고 아무것도 끄지 않는 시험 실행 — **저장소 루트에서** 한다.
+
+```bash
+cd ~/spg-deepracer-leaderboard && sudo .venv/bin/python -m worker.autostop --dry-run
+```
+
+```
+[dry-run] worker_id=ip-172-31-61-59 판단: 자동화 꺼짐 — 사람이 직접 관리
+[dry-run] 끄지 않습니다
+```
+
+- 판단은 이 순서로 정해진다: 스위치 꺼짐 → `자동화 꺼짐 — 사람이 직접 관리`, 대기·평가 제출이나
+  평가 스택이 있음 → `바쁨: …`, SSH 접속 있음 → `SSH 접속 중 — 끄지 않음 (N분째)`, 그 밖 →
+  `유휴 N분 / 30분`. 스위치를 켜기 전이면 첫 번째가, 켠 뒤 지금처럼 접속해 있으면 세 번째가 정상이다.
+- `--dry-run`은 상태 파일을 쓰지 않는다. 타이머가 쌓아 둔 유휴 시간을 읽어서 보여 주기만 한다.
+- `worker_id`가 ③의 값과 같은지 본다.
+- DB 오류가 나면 `.env`의 `DATABASE_URL`과 §8.1(`nc -zv`)을 본다.
+
+**로그**
+
+```bash
+journalctl -u drfc-autostop -n 50 --no-pager
+```
+
+```bash
+journalctl -u drfc-autostop -f
+```
+
+1분마다 `판단: …` 한 줄이 남는다. 꺼지기 직전 기록은 다시 켠 뒤 `journalctl -u drfc-autostop -b -1 -n 20 --no-pager`로
+본다(§8.9의 `-b -1`). 끈 순서는 이렇다(`worker/autostop.py`의 `shut_down`).
+
+1. DB에 `idle_stop` 기록 — 끄고 나면 알릴 수 없으니 **먼저** 남긴다. 실패하면 끄지 않는다
+2. `systemctl stop drfc-worker` — 실패하면 끄지 않는다
+3. 그 몇 초 사이 이 서버의 워커가 집은 `running` 제출을 `queued`로 되돌린다 — 실패하면 워커를 다시 올리고 끄지 않는다
+4. `systemctl poweroff`
+
+DB에 닿지 않거나 `docker stack ls`가 실패하면 **바쁜 것으로 보고 끄지 않는다.** 켜져 있는 손해는
+요금이지만, 잘못 꺼서 생기는 손해는 평가 중단이기 때문이다.
+
+> ⚠️ §8.6의 "평가 중에 `systemctl stop drfc-worker` 하지 않는다"는 사람에게 하는 경고다. 이 스크립트는
+> 대기·평가가 0건이고 평가 스택이 없을 때만 워커를 내리고, 3단계로 갇힐 제출을 되돌린다.
+
+#### ⑥ SSH로 접속해 있으면 꺼지지 않는다
+
+작업 중에 서버가 꺼지면 안 되므로, **누군가 접속해 있으면 끄지 않는다.** 따로 표시할 필요가 없다.
+
+| 규칙 | 내용 |
+|---|---|
+| 접속을 어떻게 아나 | 둘 중 하나라도 있으면 접속 중이다. **`who`** 에 로그인이 있다(보통의 `ssh`), 또는 **`ss`** 로 본 22번 포트 연결이 있다 |
+| 왜 두 가지인가 | **VS Code 원격 접속, `scp`, `rsync`는 터미널을 열지 않아 `who`에 안 보인다.** 그래서 22번 포트 연결도 본다 |
+| 접속을 끊으면 | **그때부터 30분을 새로 센다.** 접속 중에는 유휴 기록을 지운다 — 잠깐 끊었다 다시 붙는 사이에 꺼지지 않게 |
+| 접속한 채 잊으면 | 할 일이 없는데 접속 때문에 **60분** 넘게 못 끄고 있으면 디스코드로 `SSH 접속 때문에 끄지 못하는 중`(`ssh_blocking`)이 **한 번** 온다. 작업이 끝났으면 접속을 끊는다 |
+
+> **Tailscale로 접속해도 22번 포트라 똑같이 잡힌다.** 반대로 `ssh … 'journalctl …'`처럼 명령 하나만
+> 실행하고 바로 끝나는 접속은 그 몇 초 동안만 접속으로 보인다.
+
+#### ⑦ 자동 끄기를 잠시 멈추려면
+
+**기본 방법은 관리자 페이지 스위치다.**
+
+> 관리자 대시보드 → **평가 서버 자동화** → **자동화 끄기**
+
+- 배포나 재시작 없이 **다음 판단(1분 안)부터** 반영된다. 끄면 자동으로 켜지도 끄지도 않는다.
+- 마감 직전처럼 몰릴 때: 서버를 켜 두고 스위치를 끈다(명세서 Q6).
+- 대회가 아닌 기간: 서버를 중지해 두고 스위치를 끈다.
+- 스위치를 꺼 둔 채 대기 제출이 10분 넘게 처리되지 않으면 `⚠️ 자동화 꺼짐 · 대기 제출 있음`이 온다.
+  끄고 서버 켜는 것을 잊은 경우를 잡는 알림이다.
+
+**서버 안에서만 멈추는 방법** (스위치를 못 바꾸는 상황, 예: 웹 서버가 죽었을 때)
+
+```bash
+sudo systemctl stop drfc-autostop.timer
+```
+
+- `stop`은 **이번 부팅 동안만** 멈춘다. 재부팅하면 `enable` 상태라 다시 돈다. 계속 멈추려면
+  `sudo systemctl disable --now drfc-autostop.timer`.
+- 이 방법은 **끄기만** 멈춘다. 웹 서버의 자동 켜기는 그대로다. 그래서 보통은 스위치를 쓴다.
+- 다 쓰면 반드시 되돌린다: `sudo systemctl enable --now drfc-autostop.timer`. 잊으면 서버가 계속
+  켜져 요금이 나간다.
+
+#### ⑧ 자주 나는 문제
+
+| 증상 | 원인과 해결 |
+|---|---|
+| 디스코드 `⚠️ 평가 서버 켜기 실패` | `StartInstances` 실패. `UnauthorizedOperation`이면 정책 ARN 오타(④ 다의 표를 다시 돌린다), `InsufficientInstanceCapacity`면 AWS 용량 부족. 콘솔에서 직접 "인스턴스 시작"을 누르고 웹 서버 `logs autopilot`으로 원인을 본다 |
+| 서버는 켜졌는데 `⚠️ 평가 서버가 켜지지 않음` | 10분 동안 대상 워커 하트비트가 없다. `systemctl status drfc-worker`, `journalctl -u drfc-worker`, `tailscale status`, §8.1. 워커가 멀쩡하다면 ③의 워커 ID 불일치를 의심한다 |
+| `🚨 평가 서버 설정 위험` | **즉시 스위치를 끈다.** ②의 "종료 시 동작"을 `중지`로 되돌린다. 값이 이미 `중지`인데 오면 확인 자체가 실패한 것이다 — 정책의 `DescribeInstanceAttribute`(④ 다)를 본다 |
+| 할 일이 없는데 안 꺼진다 | `--dry-run`의 판단 이유를 본다. `SSH 접속 중`(⑥, VS Code 창이 열려 있는지), `자동화 꺼짐`(⑦), `바쁨: 평가 스택 실행 중`(`docker stack ls`에 `deepracer-eval-*`가 남았는지). `systemctl list-timers`에 타이머가 없으면 등록이 빠진 것이다 |
+| 꺼진 뒤 켜지자마자 `running`에 갇힌 제출이 있다 | 끄기 3단계가 되돌린다. 남아 있으면 `journalctl -u drfc-autostop -b -1`로 그 주기 기록을 본다. 갇힌 제출은 워커가 다시 켜질 때 `recover_stale_running`이 회수한다(§8.7, 같은 워커 ID라 즉시) |
+
 ---
 
 ## 9. 비용 관리 — 언제 켜고 끄는가
@@ -1160,6 +1709,11 @@ aws ec2 get-console-output --region ap-northeast-2 --instance-id <인스턴스ID
 
 **⚠️ 대회 기간에는 절대 중지하지 않는다.** 웹은 Lightsail에서 계속 돌아 제출은 정상 접수되지만
 평가가 멈춰 큐에만 쌓인다. 참가자 화면에는 "평가 서버가 재개된 뒤 순서대로 처리됩니다"가 뜬다.
+
+> **2026-10-04부터: 자동화 스위치가 켜져 있으면 대회 기간에 서버가 꺼져 있는 것이 정상이다**(§8.13).
+> 제출이 오면 웹 서버가 켜고, 30분 할 일이 없으면 스스로 중지된다. 위 경고는 **스위치가 꺼진 상태에서
+> 사람이 직접 중지하는 경우**에 해당한다. 스위치가 켜져 있으면 "직접 중지한 경우 자동으로 다시 켜지지
+> 않는다"(위 표)도 달라진다 — 대기 제출이 있으면 웹 서버가 다시 켠다.
 
 ### 9.3 긴 휴지기에는 인스턴스를 아예 없앤다
 
@@ -1202,6 +1756,36 @@ aws ec2 get-console-output --region ap-northeast-2 --instance-id <인스턴스ID
 
 `.env`와 `WORKER_TOKEN`은 AMI에 들어 있으므로 다시 설정할 필요가 없다. 다만 그 사이 서버 쪽
 `WORKER_TOKEN`을 바꿨다면 맞춰줘야 한다.
+
+자동 켜기·끄기(§8.13)를 쓰고 있었다면 새 인스턴스는 **인스턴스 ID와 사설 IP가 바뀐다.** 웹 서버
+`.env`의 `AUTOPILOT_INSTANCE_ID`, IAM 정책 ARN(§8.13 ④ — 시뮬레이터 확인까지), "종료 시 동작"(§8.13 ②),
+호스트 이름 유형(§8.13 ③)을 다시 맞춘다. `drfc-autostop.timer`는 타이머를 등록한 뒤 뜬 AMI라면 들어 있다(`systemctl list-timers drfc-autostop.timer`로 확인).
+
+### 9.4 온디맨드 + 자동 켜기·끄기 (2026-10-04~)
+
+§9.1~9.3은 스팟을 24시간 켜 두던 시절의 기준이다. 지금은 **온디맨드 1대를 필요할 때만 켠다**(§8.13).
+켜져 있는 시간만 인스턴스 요금이 나가고, 꺼져 있는 동안은 EBS 요금만 나간다(§9.1 표).
+
+2주 대회 기준 **인스턴스 요금만** 비교한다(명세서 §1.1·§1.2. m7i.xlarge 서울 온디맨드 시간당
+$0.2478, 스팟 $0.0699. EBS 100GB 약 $4/2주(월 $9, §1.1)는 어느 방식이든 같다).
+
+| 운영 방식 | 2주 인스턴스 요금 | 계산 | 단점 |
+|---|---|---|---|
+| 스팟 24시간 (§1.1) | 약 **$23** | $0.0699 × 24h × 14일 | 회수가 잦다. 2026-10-01에는 디스크째 사라졌다 |
+| 온디맨드 24시간 (§8.12) | 약 **$83~89** | $0.2478 × 24h × 14~15일 | 회수는 없지만 세 배 넘게 비싸다 |
+| **온디맨드 + 자동 켜기·끄기** | 약 **$28** (하루 8시간 켜짐 가정) | $0.2478 × 8h × 14일 | 꺼져 있을 때 들어온 첫 제출은 부팅 몇 분만큼 늦게 시작한다 |
+
+- **실제 값: 대회 후 기록(S8)** — 대회가 끝나면 Billing 콘솔에서 이 인스턴스의 실제 인스턴스 요금과
+  켜져 있던 시간을 여기에 적는다. 하루 8시간은 가정일 뿐이다. 성공 기준은 "24시간 온디맨드($83)보다
+  확실히 낮다"이다(명세서 S8).
+  ```
+  실제 값: (대회 후 기록 — 기간 / 켜진 시간 합계 / 인스턴스 요금)
+  ```
+- 자동화 자체에는 **추가 요금이 없다**(2026-10-04 검토: 디스코드 웹훅, EC2 API 호출, IAM, 서버 안
+  systemd 타이머 모두 무료). 탄력적 IP·CloudWatch 경보처럼 돈이 드는 방법은 일부러 쓰지 않았다.
+- 켜져 있는 시간을 늘리는 것은 **SSH 접속을 열어 둔 채 잊는 것**(§8.13 ⑥)과 **스위치를 끄고 서버를
+  켜 둔 채 잊는 것**(§8.13 ⑦)이다. 앞의 것은 60분 뒤 디스코드로 알려 준다. 뒤의 것은 알림이 없으니
+  마감이 지나면 스위치를 다시 켠다.
 
 ---
 
