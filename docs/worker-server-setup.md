@@ -1518,8 +1518,21 @@ Lightsail에는 IAM 역할을 붙일 수 없어서 **IAM 사용자의 액세스 
 cd ~/spg-deepracer-leaderboard && git pull
 ```
 
-`.env`에 추가할 키는 없다. `worker/autostop.py`는 기존 `DATABASE_URL`만 쓴다(유휴 시간을 바꾸고
-싶을 때만 선택으로 `AUTOSTOP_IDLE_MINUTES`).
+`.env`에 추가할 키는 없다. `worker/autostop.py`는 기존 `DATABASE_URL`만 쓴다.
+
+**유휴 시간(기본 30분)을 바꾸고 싶을 때만** 평가 서버의 `.env`에 한 줄을 넣는다. 웹 서버 `.env`가
+아니다 — 끌지 말지는 이 서버의 `autostop`이 판단하고, 웹 서버는 켜기만 한다. SSH 알림 시간(기본 60분)도
+같은 방식으로 `AUTOSTOP_SSH_ALERT_MINUTES`를 넣으면 바뀐다.
+
+```bash
+echo 'AUTOSTOP_IDLE_MINUTES=30' >> ~/spg-deepracer-leaderboard/.env
+```
+
+- **재시작·빌드가 필요 없다.** `autostop`은 타이머가 1분마다 새로 실행하는 스크립트라 실행될 때마다 `.env`를 다시 읽는다.
+- 반영 확인: 아래 `--dry-run`의 판단 문구가 `유휴 N분 / <바꾼 값>분`으로 나온다.
+- 같은 키가 두 줄이면 헷갈린다. 다시 바꿀 때는 `nano ~/spg-deepracer-leaderboard/.env`로 기존 줄을 고친다.
+- 줄이면 요금은 줄지만, 한 팀이 결과를 보고 다시 제출하는 사이에 서버가 꺼져 **매번 부팅 몇 분을 기다리게** 된다.
+  2026-10-04에 10분을 검토했다가 이 이유로 30분(명세서 확정값)을 유지했다. 바꾸면 날짜와 이유를 여기에 남긴다.
 
 **유닛 파일 두 개를 만든다.**
 
